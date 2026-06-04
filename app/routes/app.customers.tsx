@@ -316,7 +316,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           {
             variables: {
               id: customerId,
-              tags: [wholesaleTag, "b2bridge-auto-approved"],
+              tags: [
+                wholesaleTag,
+                "b2bridge-auto-approved",
+                "b2bridge-pending-approval",
+              ],
             },
           },
         );

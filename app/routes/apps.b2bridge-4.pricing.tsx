@@ -80,7 +80,7 @@ function normalizeCustomerGid(customerId?: string | null) {
 function getAcceptedCustomerTags(customerTag?: string | null) {
   return Array.from(
     new Set(
-      `${customerTag || ""},WHOLESALER,b2bridge-auto-approved`
+      `${customerTag || ""},WHOLESALER`
         .split(",")
         .map((tag) => tag.trim().toLowerCase())
         .filter(Boolean),

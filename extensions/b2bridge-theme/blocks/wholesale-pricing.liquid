@@ -1,6 +1,6 @@
 {% liquid
   assign required_tag = block.settings.customer_tag | strip
-  assign fallback_tags = 'WHOLESALER,b2bridge-auto-approved'
+  assign fallback_tags = 'WHOLESALER'
   assign required_tags = required_tag | append: ',' | append: fallback_tags
   assign accepted_tags = required_tags | split: ','
   assign has_wholesale_tag = false
