@@ -2,7 +2,7 @@
 
 client_id = "205862248d561114539c155a0a724055"
 name = "B2Bridge"
-application_url = "https://example.com"
+application_url = "https://b2bridge.kaswebtechsolutions.com"
 embedded = true
 
 [access_scopes]
@@ -18,6 +18,10 @@ subpath = "b2bridge-4"
 api_version = "2026-04"
 
   [[webhooks.subscriptions]]
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+  uri = "/webhooks/compliance"
+
+  [[webhooks.subscriptions]]
   uri = "/webhooks/app/uninstalled"
   topics = [ "app/uninstalled" ]
 
@@ -30,7 +34,7 @@ api_version = "2026-04"
   topics = [ "customers/delete" ]
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://b2bridge.kaswebtechsolutions.com/api/auth" ]
 
 [build]
 automatically_update_urls_on_dev = true
