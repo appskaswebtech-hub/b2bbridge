@@ -1367,7 +1367,17 @@ export default function RegistrationFormsPage() {
                         </InlineStack>
 
                         <InlineStack gap="200" align="end">
-                          <Button url={form.storefrontUrl}>Preview</Button>
+                          <Button
+                            onClick={() =>
+                              window.open(
+                                form.storefrontUrl,
+                                "_blank",
+                                "noopener,noreferrer",
+                              )
+                            }
+                          >
+                            Preview
+                          </Button>
                           <Button
                             variant="primary"
                             onClick={() =>
