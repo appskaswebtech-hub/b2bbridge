@@ -1,0 +1,1450 @@
+{% liquid
+  assign required_tag = block.settings.customer_tag | strip
+  assign fallback_tags = 'WHOLESALER,b2bridge-auto-approved'
+  assign required_tags = required_tag | append: ',' | append: fallback_tags
+  assign accepted_tags = required_tags | split: ','
+  assign has_wholesale_tag = false
+  assign registration_page_handle = block.settings.registration_page_handle | default: 'wholesale-registration-form' | strip
+  assign registration_form_id = block.settings.registration_form_id | strip
+  assign should_render_registration_form = false
+
+  if block.settings.enable_registration_page_form and page and page.handle == registration_page_handle
+    assign should_render_registration_form = true
+  endif
+
+  if customer
+    for accepted_tag in accepted_tags
+      assign accepted_tag_clean = accepted_tag | strip | downcase
+
+      for tag in customer.tags
+        assign customer_tag_clean = tag | strip | downcase
+
+        if customer_tag_clean == accepted_tag_clean
+          assign has_wholesale_tag = true
+        endif
+      endfor
+    endfor
+  endif
+%}
+
+{% capture b2bridge_pricing_items %}
+  [
+    {% if product %}
+      {
+        "productId": {{ product.id | json }},
+        "variantId": {{ product.selected_or_first_available_variant.id | json }},
+        "handle": {{ product.handle | json }},
+        "price": {{ product.selected_or_first_available_variant.price | divided_by: 100.0 | json }}
+      }
+    {% elsif collection and collection.products_count > 0 %}
+      {% for item_product in collection.products limit: 50 %}
+        {
+          "productId": {{ item_product.id | json }},
+          "variantId": {{ item_product.selected_or_first_available_variant.id | json }},
+          "handle": {{ item_product.handle | json }},
+          "price": {{ item_product.selected_or_first_available_variant.price | divided_by: 100.0 | json }}
+        }{% unless forloop.last %},{% endunless %}
+      {% endfor %}
+    {% endif %}
+  ]
+{% endcapture %}
+
+<script>
+  (function () {
+    var debug = {{ block.settings.debug_mode | json }};
+    var hasWholesaleTag = {% if has_wholesale_tag %}true{% else %}false{% endif %};
+    var isCustomerLoggedIn = {% if customer %}true{% else %}false{% endif %};
+    var requiredTag = {{ required_tag | json }};
+    var customerTags = [
+      {% if customer %}
+        {% for tag in customer.tags %}
+          {{ tag | json }}{% unless forloop.last %},{% endunless %}
+        {% endfor %}
+      {% endif %}
+    ];
+    var pricingItems = {{ b2bridge_pricing_items | strip }};
+    var currency = {{ cart.currency.iso_code | default: shop.currency | json }};
+    var isProductPage = {% if product %}true{% else %}false{% endif %};
+    var isCollectionPage = {% if collection %}true{% else %}false{% endif %};
+    var shouldRenderRegistrationForm = {% if should_render_registration_form %}true{% else %}false{% endif %};
+    var registrationFormId = {{ registration_form_id | json }};
+    var currentProductHandle = {{ product.handle | default: "" | json }};
+    var requestId = "b2bridge-" + Math.random().toString(36).slice(2);
+
+    if (hasWholesaleTag) {
+      document.documentElement.classList.add("b2bridge-cart-pricing-pending");
+    }
+
+    function log() {
+      if (!debug || !window.console) {
+        return;
+      }
+
+      console.log.apply(console, ["[B2Bridge pricing]"].concat([].slice.call(arguments)));
+    }
+
+    function warn() {
+      if (!debug || !window.console) {
+        return;
+      }
+
+      console.warn.apply(console, ["[B2Bridge pricing]"].concat([].slice.call(arguments)));
+    }
+
+    function renderDebugPanel(message) {
+      if (!debug || document.querySelector("[data-b2bridge-pricing-debug='" + requestId + "']")) {
+        return;
+      }
+
+      var panel = document.createElement("div");
+      panel.className = "b2bridge-pricing-debug";
+      panel.setAttribute("data-b2bridge-pricing-debug", requestId);
+      panel.textContent = message;
+      document.body.appendChild(panel);
+    }
+
+    function loadRegistrationFormPage() {
+      var mount;
+      var target;
+      var formId;
+      var url;
+
+      if (!shouldRenderRegistrationForm) {
+        return;
+      }
+
+      if (
+        document.querySelector(".b2bridge-registration-block__mount") ||
+        document.querySelector(".b2b-registration-shell")
+      ) {
+        log("registration form already exists on page");
+        return;
+      }
+
+      mount = document.createElement("div");
+      mount.className = "b2bridge-registration-block b2bridge-registration-block--auto";
+      mount.innerHTML = "<div class='b2bridge-registration-block__mount'>Loading registration form...</div>";
+
+      target =
+        document.querySelector("main#MainContent") ||
+        document.querySelector("main[role='main']") ||
+        document.querySelector("main") ||
+        document.body;
+
+      target.appendChild(mount);
+
+      formId = String(registrationFormId || "").trim();
+      url = formId
+        ? "/apps/b2bridge-4/" + encodeURIComponent(formId) + "?embedded=page"
+        : "/apps/b2bridge-4?embedded=page";
+
+      fetch(url, { credentials: "same-origin" })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("Registration form returned " + response.status);
+          }
+
+          return response.text();
+        })
+        .then(function (html) {
+          mount.innerHTML = html;
+        })
+        .catch(function (error) {
+          warn("registration form could not be loaded", error);
+          mount.innerHTML = "<p>Registration form could not be loaded. Please refresh the page.</p>";
+        });
+    }
+
+    log("embed loaded", {
+      isCustomerLoggedIn: isCustomerLoggedIn,
+      requiredTag: requiredTag,
+      customerTags: customerTags,
+      hasWholesaleTag: hasWholesaleTag,
+      itemCount: pricingItems && pricingItems.length ? pricingItems.length : 0
+    });
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", loadRegistrationFormPage);
+    } else {
+      loadRegistrationFormPage();
+    }
+
+    if (!isCustomerLoggedIn) {
+      warn("Liquid customer object is not available; endpoint will verify customer login.");
+    }
+
+    if (isCustomerLoggedIn && !hasWholesaleTag) {
+      renderDebugPanel("B2Bridge pricing: customer tag missing. Required tag: " + requiredTag);
+      warn("customer tag missing", { requiredTag: requiredTag, customerTags: customerTags });
+    }
+
+    function formatMoney(amount) {
+      var number = Number(amount);
+
+      if (!Number.isFinite(number)) {
+        number = 0;
+      }
+
+      try {
+        return new Intl.NumberFormat(undefined, {
+          style: "currency",
+          currency: currency
+        }).format(number);
+      } catch (error) {
+        return "$" + number.toFixed(2);
+      }
+    }
+
+    function parseMoney(text) {
+      var match = String(text || "").match(/([0-9][0-9,]*(?:\.[0-9]{2})?)/);
+
+      if (!match) {
+        return null;
+      }
+
+      var amount = Number(match[1].replace(/,/g, ""));
+
+      return Number.isFinite(amount) && amount > 0 ? amount : null;
+    }
+
+    function getHandleFromProductHref(href) {
+      var match = String(href || "").match(/\/products\/([^?#/]+)/);
+
+      return match ? decodeURIComponent(match[1]) : "";
+    }
+
+    function querySelectorSafe(root, selector) {
+      try {
+        return selector ? (root || document).querySelector(selector) : null;
+      } catch (error) {
+        warn("invalid selector", { selector: selector });
+        return null;
+      }
+    }
+
+    function querySelectorAllSafe(root, selector) {
+      try {
+        return selector ? (root || document).querySelectorAll(selector) : [];
+      } catch (error) {
+        warn("invalid selector", { selector: selector });
+        return [];
+      }
+    }
+
+    function closestSafe(element, selector) {
+      try {
+        return selector && element ? element.closest(selector) : null;
+      } catch (error) {
+        warn("invalid selector", { selector: selector });
+        return null;
+      }
+    }
+
+    function isVisibleElement(element) {
+      var style;
+      var rect;
+
+      if (!element) {
+        return false;
+      }
+
+      style = window.getComputedStyle(element);
+
+      if (style.display === "none" || style.visibility === "hidden") {
+        return false;
+      }
+
+      rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }
+
+    function findFirstVisible(selectors, root) {
+      var selector = Array.isArray(selectors) ? selectors.join(", ") : selectors;
+      var nodes = querySelectorAllSafe(root, selector);
+      var visibleNode = null;
+
+      nodes.forEach(function (node) {
+        if (!visibleNode && isVisibleElement(node)) {
+          visibleNode = node;
+        }
+      });
+
+      return visibleNode || nodes[0] || null;
+    }
+
+    function findProductInfoContainer() {
+      return (
+        document.querySelector("product-info") ||
+        document.querySelector(".product__info-container") ||
+        document.querySelector(".product__info") ||
+        document.querySelector("[id^='ProductInfo-']") ||
+        document.querySelector("section[id*='ProductInfo']") ||
+        document.querySelector(".product")
+      );
+    }
+
+    function findProductPagePriceTarget(display) {
+      var productInfo = findProductInfoContainer();
+      var primarySelectors = [
+        display && display.priceSelector ? display.priceSelector : "",
+        ".price.price--large",
+        ".product__price",
+        "[data-product-price]",
+        "[data-price]",
+        ".price"
+      ].filter(Boolean);
+      var fallbackSelectors = primarySelectors.concat(["price-per-item .price"]);
+
+      return (
+        findFirstVisible(primarySelectors, productInfo) ||
+        findFirstVisible(fallbackSelectors, document)
+      );
+    }
+
+    function findCollectionCard(handle, display) {
+      var links = document.querySelectorAll("a[href*='/products/" + handle + "']");
+      var bestCard = null;
+
+      links.forEach(function (link) {
+        if (bestCard) {
+          return;
+        }
+
+        bestCard =
+          closestSafe(link, display && display.cardSelector) ||
+          link.closest(".product-card-wrapper") ||
+          link.closest(".card-wrapper") ||
+          link.closest(".grid__item") ||
+          link.closest("li") ||
+          link.closest("article");
+      });
+
+      return bestCard;
+    }
+
+    function findCollectionPriceTarget(card, display) {
+      return (
+        card &&
+        querySelectorSafe(
+          card,
+          [
+            display && display.priceSelector ? display.priceSelector : "",
+            ".card-information .price",
+            ".card__information .price",
+            ".card__content .price",
+            ".price",
+            "[data-product-price]",
+            "[data-price]"
+          ].filter(Boolean).join(", ")
+        )
+      );
+    }
+
+    function getPriceFromCard(card) {
+      var target = findCollectionPriceTarget(card);
+
+      return parseMoney(target ? target.textContent : "");
+    }
+
+    function collectDomPricingItems() {
+      var found = {};
+      var items = [];
+
+      document.querySelectorAll("a[href*='/products/']").forEach(function (link) {
+        var handle = getHandleFromProductHref(link.getAttribute("href"));
+        var card;
+        var price;
+
+        if (!handle || found[handle]) {
+          return;
+        }
+
+        card = findCollectionCard(handle);
+        price = getPriceFromCard(card);
+
+        if (!price) {
+          warn("could not parse product card price", { handle: handle });
+          return;
+        }
+
+        found[handle] = true;
+        items.push({
+          productId: "",
+          variantId: "",
+          handle: handle,
+          price: price
+        });
+      });
+
+      return items;
+    }
+
+    function getDisplayOptions(pricing, context) {
+      var defaults = context === "collection"
+        ? {
+            style: "compact",
+            placement: "replace_price",
+            showLabel: false,
+            showCompare: true,
+            showDiscount: true,
+            fontSize: "13",
+            accentColor: "#111827"
+          }
+        : {
+            style: "simple",
+            placement: "replace_price",
+            showLabel: true,
+            showCompare: true,
+            showDiscount: true,
+            fontSize: "18",
+            accentColor: "#111827"
+          };
+      var display = pricing.display && pricing.display[context] ? pricing.display[context] : {};
+
+      return Object.assign({}, defaults, display);
+    }
+
+    function buildWholesaleMarkup(pricing, retailPrice, compact, display) {
+      var discountLabel = "";
+      var showLabel = display.showLabel;
+      var showCompare = display.showCompare;
+      var showDiscount = display.showDiscount;
+
+      if (pricing.discountPercent) {
+        discountLabel = pricing.discountPercent + "% off";
+      } else if (pricing.discountAmount) {
+        discountLabel = formatMoney(pricing.discountAmount) + " off";
+      }
+
+      return (
+        (showLabel ? "<span class='b2bridge-wholesale-price__label'>Wholesale price</span>" : "") +
+        "<strong>" +
+        formatMoney(Number(pricing.wholesalePrice)) +
+        "</strong>" +
+        (showCompare
+          ? "<span class='b2bridge-wholesale-price__compare'>Retail " +
+            formatMoney(retailPrice) +
+            "</span>"
+          : "") +
+        (showDiscount && discountLabel
+          ? "<span class='b2bridge-wholesale-price__discount'>" + discountLabel + "</span>"
+          : "")
+      );
+    }
+
+    function applyWholesaleClass(target, compact, handle, display) {
+      target.classList.add("b2bridge-wholesale-price");
+      target.classList.remove(
+        "b2bridge-wholesale-price--product",
+        "b2bridge-wholesale-price--collection"
+      );
+      target.classList.add(
+        compact
+          ? "b2bridge-wholesale-price--collection"
+          : "b2bridge-wholesale-price--product"
+      );
+      target.classList.remove(
+        "b2bridge-wholesale-price--simple",
+        "b2bridge-wholesale-price--card",
+        "b2bridge-wholesale-price--pill"
+      );
+      target.classList.add("b2bridge-wholesale-price--" + (display.style || "simple"));
+      target.style.setProperty("--b2bridge-price-font-size", (display.fontSize || "16") + "px");
+      target.style.setProperty("--b2bridge-price-color", display.accentColor || "#111827");
+
+      if (compact) {
+        target.classList.add("b2bridge-wholesale-price--compact");
+      } else {
+        target.classList.remove("b2bridge-wholesale-price--compact");
+      }
+
+      target.setAttribute("data-b2bridge-wholesale-handle", handle);
+    }
+
+    function hideOriginalPriceNodes(container, target) {
+      if (!container) {
+        return;
+      }
+
+      container.querySelectorAll(".price, [data-product-price], [data-price]").forEach(function (priceNode) {
+        if (priceNode === target || priceNode.contains(target) || target.contains(priceNode)) {
+          return;
+        }
+
+        priceNode.setAttribute("data-b2bridge-original-price-hidden", "true");
+        priceNode.style.display = "none";
+      });
+    }
+
+    function forceInsertPrice(card, pricing, retailPrice, compact, handle, display) {
+      var anchor =
+        card &&
+        (card.querySelector(".card-information") ||
+          card.querySelector(".card__information") ||
+          card.querySelector(".card__heading") ||
+          card.querySelector("a[href*='/products/" + handle + "']"));
+
+      if (!anchor) {
+        warn("force insert target not found", { handle: handle });
+        return;
+      }
+
+      var existing = card.querySelector("[data-b2bridge-wholesale-handle='" + handle + "']");
+
+      if (existing) {
+        existing.innerHTML = buildWholesaleMarkup(pricing, retailPrice, compact, display);
+        return;
+      }
+
+      var priceNode = document.createElement("div");
+      applyWholesaleClass(priceNode, compact, handle, display);
+      priceNode.innerHTML = buildWholesaleMarkup(pricing, retailPrice, compact, display);
+      anchor.insertAdjacentElement("afterend", priceNode);
+      hideOriginalPriceNodes(card, priceNode);
+    }
+
+    function forceInsertProductPrice(pricing, retailPrice, handle, display) {
+      var productInfo = findProductInfoContainer();
+      var anchor =
+        productInfo &&
+        (display.placement === "custom_selector" && display.priceSelector
+          ? querySelectorSafe(productInfo, display.priceSelector)
+          : display.placement === "above_form"
+          ? productInfo.querySelector("form[action*='/cart/add']") ||
+            productInfo.querySelector("product-form")
+          : productInfo.querySelector(".product__title") ||
+            productInfo.querySelector("h1") ||
+            productInfo.querySelector("variant-radios") ||
+            productInfo.querySelector("variant-selects") ||
+            productInfo.querySelector("form[action*='/cart/add']"));
+      var existing;
+      var priceNode;
+
+      if (!anchor) {
+        warn("product price insert target not found", { handle: handle });
+        return;
+      }
+
+      existing =
+        productInfo &&
+        productInfo.querySelector("[data-b2bridge-wholesale-handle='" + handle + "']");
+
+      if (existing) {
+        existing.innerHTML = buildWholesaleMarkup(pricing, retailPrice, false, display);
+        return;
+      }
+
+      priceNode = document.createElement("div");
+      applyWholesaleClass(priceNode, false, handle, display);
+      priceNode.innerHTML = buildWholesaleMarkup(pricing, retailPrice, false, display);
+      anchor.insertAdjacentElement(display.placement === "above_form" ? "beforebegin" : "afterend", priceNode);
+      hideOriginalPriceNodes(productInfo, priceNode);
+    }
+
+    function forceInsertCollectionPrice(card, pricing, retailPrice, handle, display) {
+      var anchor;
+      var existing;
+      var priceNode;
+
+      if (!card) {
+        warn("collection card not found", { handle: handle });
+        return;
+      }
+
+      if (display.placement === "custom_selector" && display.priceSelector) {
+        anchor = querySelectorSafe(card, display.priceSelector);
+      }
+
+      if (!anchor && display.placement === "below_image") {
+        anchor =
+          card.querySelector(".card__media") ||
+          card.querySelector(".media") ||
+          card.querySelector("img");
+      }
+
+      if (!anchor) {
+        anchor =
+          card.querySelector(".card__heading") ||
+          card.querySelector(".card-information") ||
+          card.querySelector(".card__information") ||
+          card.querySelector("a[href*='/products/" + handle + "']");
+      }
+
+      if (!anchor) {
+        warn("collection price insert target not found", { handle: handle });
+        return;
+      }
+
+      existing = card.querySelector("[data-b2bridge-wholesale-handle='" + handle + "']");
+
+      if (existing) {
+        existing.innerHTML = buildWholesaleMarkup(pricing, retailPrice, true, display);
+        return;
+      }
+
+      priceNode = document.createElement("div");
+      applyWholesaleClass(priceNode, true, handle, display);
+      priceNode.innerHTML = buildWholesaleMarkup(pricing, retailPrice, true, display);
+      anchor.insertAdjacentElement("afterend", priceNode);
+      hideOriginalPriceNodes(card, priceNode);
+    }
+
+    function renderWholesalePrice(target, pricing, retailPrice, compact, handle, card, display) {
+      var markup = buildWholesaleMarkup(pricing, retailPrice, compact, display);
+
+      if (!target) {
+        forceInsertPrice(card, pricing, retailPrice, compact, handle, display);
+        return;
+      }
+
+      applyWholesaleClass(target, compact, handle, display);
+      target.innerHTML = markup;
+
+      hideOriginalPriceNodes(card, target);
+
+      if (compact) {
+        target.style.display = "grid";
+      } else {
+        target.style.display = "grid";
+      }
+
+      log("rendered wholesale price", {
+        handle: handle,
+        wholesalePrice: pricing.wholesalePrice,
+        retailPrice: retailPrice,
+        ruleType: pricing.ruleType
+      });
+    }
+
+    function loadPricing(item) {
+      var endpoint =
+        "/apps/b2bridge-4/pricing?product_id=" +
+        encodeURIComponent(item.productId) +
+        "&variant_id=" +
+        encodeURIComponent(item.variantId) +
+        "&handle=" +
+        encodeURIComponent(item.handle) +
+        "&price=" +
+        encodeURIComponent(item.price) +
+        "&theme_customer_verified=" +
+        (hasWholesaleTag ? "1" : "0");
+
+      log("loading pricing", endpoint);
+
+      return fetch(endpoint, { credentials: "same-origin" })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("Pricing endpoint returned " + response.status);
+          }
+
+          return response.json();
+        })
+        .then(function (pricing) {
+          var productPageTarget;
+          var collectionCard;
+          var collectionTarget;
+          var productDisplay;
+          var collectionDisplay;
+
+          log("pricing response", item.handle, pricing);
+
+          if (!pricing.enabled || pricing.wholesalePrice === null || pricing.wholesalePrice === undefined) {
+            return;
+          }
+
+          if (isProductPage && item.handle === currentProductHandle) {
+            productDisplay = getDisplayOptions(pricing, "product");
+
+            if (productDisplay.placement !== "replace_price") {
+              forceInsertProductPrice(pricing, item.price, item.handle, productDisplay);
+              return;
+            }
+
+            productPageTarget = findProductPagePriceTarget(productDisplay);
+
+            if (!productPageTarget) {
+              forceInsertProductPrice(pricing, item.price, item.handle, productDisplay);
+              return;
+            }
+
+            renderWholesalePrice(
+              productPageTarget,
+              pricing,
+              item.price,
+              false,
+              item.handle,
+              findProductInfoContainer(),
+              productDisplay
+            );
+            return;
+          }
+
+          collectionDisplay = getDisplayOptions(pricing, "collection");
+          collectionCard = findCollectionCard(item.handle, collectionDisplay);
+
+          if (collectionDisplay.placement !== "replace_price") {
+            forceInsertCollectionPrice(
+              collectionCard,
+              pricing,
+              item.price,
+              item.handle,
+              collectionDisplay
+            );
+            return;
+          }
+
+          collectionTarget = findCollectionPriceTarget(collectionCard, collectionDisplay);
+          renderWholesalePrice(
+            collectionTarget,
+            pricing,
+            item.price,
+            true,
+            item.handle,
+            collectionCard,
+            collectionDisplay
+          );
+        })
+        .catch(function (error) {
+          warn("pricing request failed", { handle: item.handle, error: error.message });
+        });
+    }
+
+    function getCheckoutTarget(element) {
+      return (
+        element &&
+        element.closest(
+          "button[name='checkout'], input[name='checkout'], button[type='submit'], input[type='submit'], a[href*='/checkout'], .cart__checkout-button, [onclick*='checkout']"
+        )
+      );
+    }
+
+    function isCheckoutTarget(target) {
+      var label;
+
+      if (!target) {
+        return false;
+      }
+
+      if (target.matches("a[href*='/checkout'], button[name='checkout'], input[name='checkout'], .cart__checkout-button, [onclick*='checkout']")) {
+        return true;
+      }
+
+      label = String(target.textContent || target.value || "").trim().toLowerCase();
+      return label === "checkout" || label === "check out";
+    }
+
+    function continueNormalCheckout(trigger, forceCheckout) {
+      var form = trigger && trigger.closest ? trigger.closest("form") : null;
+      var href = trigger && trigger.href ? trigger.href : "";
+
+      if (forceCheckout) {
+        window.location.href = href && href.indexOf("/checkout") >= 0 ? href : "/checkout";
+        return;
+      }
+
+      if (form) {
+        HTMLFormElement.prototype.submit.call(form);
+        return;
+      }
+
+      window.location.href = href || "/checkout";
+    }
+
+    function fetchCartItems() {
+      return fetch("/cart.js", { credentials: "same-origin" })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("Cart returned " + response.status);
+          }
+
+          return response.json();
+        })
+        .then(function (cart) {
+          return (cart.items || []).map(function (item) {
+            return {
+              productId: item.product_id,
+              variantId: item.variant_id,
+              handle: item.handle || getHandleFromProductHref(item.url),
+              price: item.original_price || item.price,
+              quantity: item.quantity
+            };
+          });
+        });
+    }
+
+    function createWholesaleCheckout() {
+      return fetchCartItems()
+        .then(function (items) {
+          if (!items.length) {
+            return null;
+          }
+
+          return fetch("/apps/b2bridge-4/draft-checkout", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ items: items })
+          });
+        })
+        .then(function (response) {
+          if (!response || !response.ok) {
+            return null;
+          }
+
+          return response.json();
+        })
+        .then(function (result) {
+          return result && result.ok && result.checkoutUrl ? result.checkoutUrl : "";
+        });
+    }
+
+    function findCartLine(handle, index) {
+      var link = handle
+        ? document.querySelector(
+            ".cart-drawer a[href*='/products/" + handle + "'], .cart a[href*='/products/" + handle + "'], a[href*='/products/" + handle + "']"
+          )
+        : null;
+      var line =
+        link &&
+        (link.closest(".cart-item") ||
+          link.closest(".cart__item") ||
+          link.closest("[id*='CartItem']") ||
+          link.closest("tr") ||
+          link.closest("li"));
+
+      if (line) {
+        return line;
+      }
+
+      return document.querySelectorAll(
+        ".cart-drawer .cart-item, .cart .cart-item, .cart-item, .cart__item, [id*='CartItem']"
+      )[index || 0];
+    }
+
+    function uniqueElements(elements) {
+      var seen = [];
+
+      elements.forEach(function (element) {
+        if (element && seen.indexOf(element) === -1) {
+          seen.push(element);
+        }
+      });
+
+      return seen;
+    }
+
+    function findCartLines(handle, index) {
+      var lines = [];
+      var links = handle
+        ? document.querySelectorAll(
+            ".cart-drawer a[href*='/products/" + handle + "'], .cart a[href*='/products/" + handle + "'], a[href*='/products/" + handle + "']"
+          )
+        : [];
+      var indexedLines = document.querySelectorAll(
+        ".cart-drawer .cart-item, .cart .cart-item, .cart-item, .cart__item, [id*='CartItem']"
+      );
+
+      links.forEach(function (link) {
+        lines.push(
+          link.closest(".cart-item") ||
+            link.closest(".cart__item") ||
+            link.closest("[id*='CartItem']") ||
+            link.closest("tr") ||
+            link.closest("li")
+        );
+      });
+
+      if (indexedLines[index || 0]) {
+        lines.push(indexedLines[index || 0]);
+      }
+
+      return uniqueElements(lines);
+    }
+
+    function findCartLineTotalTarget(line) {
+      return (
+        line &&
+        (line.querySelector("[data-b2bridge-wholesale-handle]") ||
+          line.querySelector("td:last-child .price") ||
+          line.querySelector(".right .price") ||
+          line.querySelector(".cart-item__totals .price") ||
+          line.querySelector(".cart-item__totals .money") ||
+          line.querySelector(".cart-item__totals") ||
+          line.querySelector("[data-cart-item-line-price]") ||
+          line.querySelector("[data-cart-item-final-line-price]") ||
+          line.querySelector("[data-cart-item-final-price]"))
+      );
+    }
+
+    function findCartUnitPriceTargets(line) {
+      if (!line) {
+        return [];
+      }
+
+      return Array.from(
+        line.querySelectorAll(
+          [
+            ".cart-item__details .price",
+            ".cart-item__details .money",
+            ".cart-item__price-wrapper .price",
+            ".cart-item__price-wrapper .money",
+            "[data-cart-item-original-price]",
+            "[data-cart-item-regular-price]",
+            "[data-cart-item-final-price]"
+          ].join(", ")
+        )
+      ).filter(function (node) {
+        return !node.closest(".cart-item__totals") && !node.hasAttribute("data-b2bridge-wholesale-handle");
+      });
+    }
+
+    function ensureCartLineTotalTarget(line) {
+      var target = findCartLineTotalTarget(line);
+      var insertedTarget;
+
+      if (target) {
+        return target;
+      }
+
+      insertedTarget = document.createElement("div");
+      (line.querySelector("td:last-child") ||
+        line.querySelector(".cart-item__totals") ||
+        line).appendChild(insertedTarget);
+
+      return insertedTarget;
+    }
+
+    function findCartLinePriceTarget(line) {
+      return (
+        line &&
+        (findCartLineTotalTarget(line) ||
+          line.querySelector(".cart-item__price-wrapper .price") ||
+          line.querySelector("[data-cart-item-final-price]") ||
+          line.querySelector(".price") ||
+          line.querySelector(".money"))
+      );
+    }
+
+    function findCartTotalTarget() {
+      return document.querySelector(
+        [
+          ".cart-drawer .totals__total-value",
+          ".cart__footer .totals__total-value",
+          ".totals__total-value",
+          "[data-cart-total]"
+        ].join(", ")
+      );
+    }
+
+    function findCartTotalTargets() {
+      return Array.from(
+        document.querySelectorAll(
+          [
+            ".cart-drawer .totals__total-value",
+            ".cart__footer .totals__total-value",
+            ".totals__total-value",
+            "[data-cart-total]"
+          ].join(", ")
+        )
+      );
+    }
+
+    function renderCartLinePrice(line, pricing, retailPrice, quantity, handle) {
+      var target = ensureCartLineTotalTarget(line);
+      var unitTargets = findCartUnitPriceTargets(line);
+      var retailLinePrice = retailPrice * quantity;
+      var display = {
+        style: "simple",
+        showLabel: false,
+        showCompare: true,
+        showDiscount: true,
+        fontSize: "13",
+        accentColor: "#111827"
+      };
+
+      applyWholesaleClass(target, true, handle, display);
+      target.innerHTML = buildWholesaleMarkup(
+        Object.assign({}, pricing, {
+          wholesalePrice: Number(pricing.wholesalePrice) * quantity
+        }),
+        retailLinePrice,
+        true,
+        display
+      );
+      target.style.display = "grid";
+
+      unitTargets.forEach(function (unitTarget) {
+        if (unitTarget === target || unitTarget.contains(target) || target.contains(unitTarget)) {
+          return;
+        }
+
+        unitTarget.setAttribute("data-b2bridge-original-price-hidden", "true");
+        unitTarget.style.display = "none";
+      });
+
+      line.querySelectorAll(".cart-item__details *, .cart-drawer__product *, .cart__item *").forEach(function (node) {
+        var amount;
+
+        if (
+          node === target ||
+          node.contains(target) ||
+          target.contains(node) ||
+          node.querySelector("a, button, input, select, quantity-input")
+        ) {
+          return;
+        }
+
+        amount = parseMoney(node.textContent);
+
+        if (
+          amount !== null &&
+          (Math.abs(amount - retailPrice) < 0.01 ||
+            Math.abs(amount - retailLinePrice) < 0.01)
+        ) {
+          node.setAttribute("data-b2bridge-original-price-hidden", "true");
+          node.style.display = "none";
+        }
+      });
+    }
+
+    function refreshCartWholesalePrices() {
+      if (!hasWholesaleTag) {
+        return;
+      }
+
+      document.documentElement.classList.add("b2bridge-cart-pricing-pending");
+
+      fetchCartItems()
+        .then(function (items) {
+          var total = 0;
+
+          return Promise.all(
+            items.map(function (item, index) {
+              var unitPrice = Number(item.price || 0) / 100;
+
+              return fetch(
+                "/apps/b2bridge-4/pricing?product_id=" +
+                  encodeURIComponent(item.productId) +
+                  "&variant_id=" +
+                  encodeURIComponent(item.variantId) +
+                  "&handle=" +
+                  encodeURIComponent(item.handle || "") +
+                  "&price=" +
+                  encodeURIComponent(unitPrice) +
+                  "&theme_customer_verified=" +
+                  (hasWholesaleTag ? "1" : "0"),
+                { credentials: "same-origin" }
+              )
+                .then(function (response) {
+                  return response.ok ? response.json() : null;
+                })
+                .then(function (pricing) {
+                  var lines = findCartLines(item.handle, index);
+                  var quantity = Number(item.quantity || 1);
+                  var linePrice =
+                    pricing && pricing.enabled && pricing.wholesalePrice
+                      ? Number(pricing.wholesalePrice)
+                      : unitPrice;
+
+                  total += linePrice * quantity;
+
+                  if (pricing && pricing.enabled && pricing.wholesalePrice && lines.length) {
+                    lines.forEach(function (line) {
+                      renderCartLinePrice(line, pricing, unitPrice, quantity, item.handle);
+                    });
+                  }
+                });
+            })
+          ).then(function () {
+            var totalTargets = findCartTotalTargets();
+
+            if (totalTargets.length && total > 0) {
+              totalTargets.forEach(function (totalTarget) {
+                totalTarget.textContent = formatMoney(total) + " " + currency;
+              });
+            }
+          });
+        })
+        .catch(function (error) {
+          warn("cart price refresh failed", { error: error.message });
+        })
+        .finally(function () {
+          document.documentElement.classList.remove("b2bridge-cart-pricing-pending");
+        });
+    }
+
+    var cartRefreshTimer = null;
+
+    function scheduleCartWholesaleRefresh() {
+      if (hasWholesaleTag) {
+        document.documentElement.classList.add("b2bridge-cart-pricing-pending");
+      }
+
+      window.clearTimeout(cartRefreshTimer);
+      cartRefreshTimer = window.setTimeout(refreshCartWholesalePrices, 250);
+    }
+
+    function scheduleCartWholesaleRefreshBurst() {
+      scheduleCartWholesaleRefresh();
+      window.setTimeout(refreshCartWholesalePrices, 800);
+      window.setTimeout(refreshCartWholesalePrices, 1500);
+    }
+
+    function handleCheckoutEvent(event, trigger) {
+      if (!hasWholesaleTag || !trigger || trigger.hasAttribute("data-b2bridge-checkout-bypass")) {
+        return;
+      }
+
+      event.preventDefault();
+      trigger.setAttribute("aria-busy", "true");
+
+      createWholesaleCheckout()
+        .then(function (checkoutUrl) {
+          if (checkoutUrl) {
+            window.location.href = checkoutUrl;
+            return;
+          }
+
+          trigger.setAttribute("data-b2bridge-checkout-bypass", "true");
+          continueNormalCheckout(trigger, true);
+        })
+        .catch(function (error) {
+          warn("draft checkout failed", { error: error.message });
+          trigger.setAttribute("data-b2bridge-checkout-bypass", "true");
+          continueNormalCheckout(trigger, true);
+        });
+    }
+
+    document.addEventListener(
+      "click",
+      function (event) {
+        var target = getCheckoutTarget(event.target);
+        var cartOpenTarget =
+          event.target &&
+          event.target.closest &&
+          event.target.closest(
+            "a[href='/cart'], a[href*='/cart'], #cart-icon-bubble, cart-drawer, .header__icon--cart"
+          );
+
+        if (isCheckoutTarget(target)) {
+          handleCheckoutEvent(event, target);
+          return;
+        }
+
+        if (cartOpenTarget) {
+          scheduleCartWholesaleRefreshBurst();
+        }
+
+        if (
+          event.target &&
+          event.target.closest &&
+          event.target.closest("button[name='add'], button[type='submit'][formaction*='/cart/add']")
+        ) {
+          scheduleCartWholesaleRefreshBurst();
+        }
+      },
+      true
+    );
+
+    document.addEventListener(
+      "submit",
+      function (event) {
+        var form = event.target;
+        var checkoutButton;
+
+        if (!form || form.hasAttribute("data-b2bridge-checkout-bypass")) {
+          return;
+        }
+
+        if (String(form.action || "").includes("/cart/add")) {
+          scheduleCartWholesaleRefreshBurst();
+          return;
+        }
+
+        checkoutButton = form.querySelector(
+          "button[name='checkout'], input[name='checkout'], button[type='submit'][formaction*='/checkout'], input[type='submit'][formaction*='/checkout']"
+        );
+
+        if (checkoutButton) {
+          handleCheckoutEvent(event, checkoutButton);
+        }
+      },
+      true
+    );
+
+    document.addEventListener("cart:updated", scheduleCartWholesaleRefreshBurst);
+    document.addEventListener("cart:refresh", scheduleCartWholesaleRefreshBurst);
+    document.addEventListener("shopify:section:load", scheduleCartWholesaleRefreshBurst);
+    document.addEventListener("change", function (event) {
+      var target = event.target;
+
+      if (
+        target &&
+        target.matches &&
+        target.matches("input[name='updates[]'], input[name^='updates'], quantity-input input")
+      ) {
+        scheduleCartWholesaleRefresh();
+      }
+    });
+
+    if (window.MutationObserver) {
+      new MutationObserver(function (mutations) {
+        var shouldRefresh = mutations.some(function (mutation) {
+          if (
+            mutation.type === "attributes" &&
+            mutation.target &&
+            mutation.target.matches &&
+            mutation.target.matches(".cart-drawer, cart-drawer, .cart, form[action*='/cart']")
+          ) {
+            return true;
+          }
+
+          return Array.prototype.some.call(mutation.addedNodes || [], function (node) {
+            return (
+              node.nodeType === 1 &&
+              (node.matches && node.matches(".cart-drawer, cart-drawer, .cart, form[action*='/cart']"))
+            );
+          });
+        });
+
+        if (shouldRefresh) {
+          scheduleCartWholesaleRefresh();
+        }
+      }).observe(document.body, {
+        attributes: true,
+        attributeFilter: ["class", "open", "aria-hidden"],
+        childList: true,
+        subtree: true
+      });
+    }
+
+    scheduleCartWholesaleRefreshBurst();
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", scheduleCartWholesaleRefreshBurst);
+    } else {
+      scheduleCartWholesaleRefreshBurst();
+    }
+    window.addEventListener("load", scheduleCartWholesaleRefreshBurst);
+
+    if (!pricingItems || pricingItems.length === 0) {
+      pricingItems = collectDomPricingItems();
+      log("collected products from DOM", pricingItems);
+    }
+
+    if (!pricingItems || pricingItems.length === 0) {
+      if (isProductPage || isCollectionPage) {
+        renderDebugPanel("B2Bridge pricing: no products found on this template.");
+        warn("no pricing items found");
+      } else {
+        log("skipping pricing on non-product template");
+      }
+      return;
+    }
+
+    pricingItems.forEach(loadPricing);
+  })();
+</script>
+
+<style>
+  .b2bridge-wholesale-price {
+    border: 0;
+    border-radius: 0;
+    margin: 10px 0 14px;
+    padding: 0;
+    background: transparent;
+    color: currentColor;
+    display: grid;
+    gap: 2px;
+    width: fit-content;
+    box-shadow: none;
+    box-sizing: border-box;
+  }
+
+  .b2bridge-cart-pricing-pending .cart-item .price,
+  .b2bridge-cart-pricing-pending .cart-item .money,
+  .b2bridge-cart-pricing-pending .cart-item__totals,
+  .b2bridge-cart-pricing-pending .cart-item__price-wrapper,
+  .b2bridge-cart-pricing-pending .cart-drawer .totals__total-value,
+  .b2bridge-cart-pricing-pending .cart__footer .totals__total-value {
+    visibility: hidden;
+  }
+
+  .b2bridge-cart-pricing-pending [data-b2bridge-wholesale-handle] {
+    visibility: visible;
+  }
+
+  .b2bridge-wholesale-price--product {
+    margin: 12px 0 18px;
+    width: 100%;
+    max-width: 420px;
+  }
+
+  .b2bridge-wholesale-price--product.b2bridge-wholesale-price--simple {
+    width: auto;
+    max-width: none;
+  }
+
+  .b2bridge-wholesale-price__label,
+  .b2bridge-wholesale-price__compare {
+    font-size: 12px;
+    color: rgba(17, 24, 39, 0.62);
+  }
+
+  .b2bridge-wholesale-price--product .b2bridge-wholesale-price__label,
+  .b2bridge-wholesale-price--product .b2bridge-wholesale-price__compare {
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .b2bridge-wholesale-price strong {
+    color: var(--b2bridge-price-color, currentColor);
+    font-size: var(--b2bridge-price-font-size, 18px);
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .b2bridge-wholesale-price__discount {
+    border-radius: 999px;
+    background: #d1fae5;
+    color: #065f46;
+    font-size: 11px;
+    font-weight: 700;
+    justify-self: start;
+    margin-top: 2px;
+    padding: 2px 8px;
+    text-transform: uppercase;
+  }
+
+  .b2bridge-wholesale-price--card {
+    border: 1px solid rgba(17, 24, 39, 0.12);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: rgba(17, 24, 39, 0.035);
+  }
+
+  .b2bridge-wholesale-price--product.b2bridge-wholesale-price--card {
+    align-items: start;
+    min-height: 0;
+  }
+
+  @media screen and (max-width: 749px) {
+    .b2bridge-wholesale-price--product {
+      max-width: 100%;
+    }
+  }
+
+  .b2bridge-wholesale-price--pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border-radius: 999px;
+    padding: 6px 10px;
+    background: rgba(17, 24, 39, 0.045);
+  }
+
+  .b2bridge-wholesale-price--pill .b2bridge-wholesale-price__compare,
+  .b2bridge-wholesale-price--pill .b2bridge-wholesale-price__discount {
+    margin-top: 0;
+  }
+
+  .b2bridge-wholesale-price--compact {
+    border: 0;
+    border-radius: 0;
+    margin: 0.35rem 0 0;
+    padding: 0;
+    background: transparent;
+    color: currentColor;
+    width: auto;
+    box-shadow: none;
+    gap: 1px;
+    line-height: 1.25;
+    max-width: 100%;
+  }
+
+  .b2bridge-wholesale-price--compact strong {
+    display: block;
+    color: var(--b2bridge-price-color, #111827);
+    font-size: var(--b2bridge-price-font-size, 13px);
+    font-weight: 500;
+    line-height: 1.35;
+  }
+
+  .b2bridge-wholesale-price--compact .b2bridge-wholesale-price__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .b2bridge-wholesale-price--compact .b2bridge-wholesale-price__compare {
+    display: block;
+    margin-top: 1px;
+    color: rgba(17, 24, 39, 0.58);
+    font-size: 11px;
+    text-decoration: line-through;
+  }
+
+  .b2bridge-wholesale-price--compact .b2bridge-wholesale-price__discount {
+    display: inline-block;
+    margin-top: 3px;
+    padding: 1px 6px;
+    font-size: 10px;
+  }
+
+  .b2bridge-pricing-debug {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    z-index: 2147483647;
+    max-width: min(360px, calc(100vw - 28px));
+    border: 1px solid #f59e0b;
+    border-radius: 8px;
+    background: #fffbeb;
+    color: #78350f;
+    padding: 10px 12px;
+    font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    box-shadow: 0 12px 30px rgba(120, 53, 15, 0.16);
+  }
+</style>
+
+{% schema %}
+{
+  "name": "Wholesale pricing",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "customer_tag",
+      "label": "Wholesale customer tags",
+      "default": "b2bridge-auto-approved,WHOLESALER"
+    },
+    {
+      "type": "checkbox",
+      "id": "debug_mode",
+      "label": "Show storefront debug",
+      "default": false
+    },
+    {
+      "type": "checkbox",
+      "id": "enable_registration_page_form",
+      "label": "Show registration form on page",
+      "default": true
+    },
+    {
+      "type": "text",
+      "id": "registration_page_handle",
+      "label": "Registration page handle",
+      "default": "wholesale-registration-form"
+    },
+    {
+      "type": "text",
+      "id": "registration_form_id",
+      "label": "Registration form ID"
+    }
+  ]
+}
+{% endschema %}

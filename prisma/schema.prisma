@@ -1,0 +1,220 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model WholesaleForm {
+  id   String @id @default(cuid())
+  shop String
+
+  title       String
+  formUrlType String @default("portal")
+  previewUrl  String @default("/apps/b2bridge-4")
+  status      String @default("active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  approvalSetting WholesaleFormApprovalSetting?
+
+  postRegistration WholesaleFormPostRegistration?
+  fieldSetting     WholesaleFormFieldSetting?
+  messageSetting   WholesaleFormMessageSetting?
+  submissions      WholesaleFormSubmission[]
+
+  @@index([shop])
+}
+
+model WholesaleFormApprovalSetting {
+  id String @id @default(cuid())
+
+  shop   String
+  formId String @unique
+
+  approvalType         String  @default("manual")
+  hidePasswordField    Boolean @default(true)
+  autoApproveDomain    Boolean @default(false)
+  autoApproveEmailRule String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  form WholesaleForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+}
+
+model WholesaleFormPostRegistration {
+  id String @id @default(cuid())
+
+  shop   String
+  formId String @unique
+
+  redirectUrl String?
+  customerTag String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  form WholesaleForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+}
+
+model WholesaleFormFieldSetting {
+  id String @id @default(cuid())
+
+  shop   String
+  formId String @unique
+
+  fieldsJson                  String  @default("[]")
+  requirePrivacyPolicy        Boolean @default(false)
+  enablePrivacyPolicyCheckbox Boolean @default(false)
+  enableRecaptcha             Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  form WholesaleForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+}
+
+model WholesaleFormMessageSetting {
+  id String @id @default(cuid())
+
+  shop   String
+  formId String @unique
+
+  successColor   String @default("#008000")
+  errorColor     String @default("#ff0000")
+  successMessage String @default("Your registration was submitted successfully.")
+  errorMessage   String @default("Something went wrong. Please check the form and try again.")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  form WholesaleForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+}
+
+model WholesaleFormSubmission {
+  id String @id @default(cuid())
+
+  shop   String
+  formId String
+
+  email       String?
+  firstName   String?
+  lastName    String?
+  phone       String?
+  company     String?
+  fieldsJson  String   @default("{}")
+  customerId  String?
+  status      String   @default("submitted")
+  submittedAt DateTime @default(now())
+
+  form WholesaleForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([formId])
+  @@index([email])
+}
+
+model WholesalePricingSetting {
+  id String @id @default(cuid())
+
+  shop        String @unique
+  enabled     Boolean @default(false)
+  customerTag String  @default("WHOLESALER")
+  pricingMode String  @default("global")
+
+  globalDiscountPercent String?
+  globalDiscountAmount  String?
+
+  productPriceStyle      String  @default("simple")
+  productPricePlacement  String  @default("replace_price")
+  productShowLabel       Boolean @default(true)
+  productShowCompare     Boolean @default(true)
+  productShowDiscount    Boolean @default(true)
+  productFontSize        String  @default("18")
+  productAccentColor     String  @default("#111827")
+  productPriceSelector   String?
+
+  collectionPriceStyle     String  @default("compact")
+  collectionPricePlacement String  @default("replace_price")
+  collectionShowLabel      Boolean @default(false)
+  collectionShowCompare    Boolean @default(true)
+  collectionShowDiscount   Boolean @default(true)
+  collectionFontSize       String  @default("13")
+  collectionAccentColor    String  @default("#111827")
+  collectionCardSelector   String?
+  collectionPriceSelector  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  productRules WholesaleProductPricingRule[]
+
+  @@index([shop])
+}
+
+model WholesaleProductPricingRule {
+  id String @id @default(cuid())
+
+  shop      String
+  settingId String
+
+  productGid    String?
+  productHandle String?
+  productTitle  String
+  variantGid    String?
+  variantSku    String?
+  variantTitle  String?
+
+  discountPercent String?
+  discountAmount  String?
+  fixedPrice      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  setting WholesalePricingSetting @relation(fields: [settingId], references: [id], onDelete: Cascade)
+
+  @@index([shop])
+  @@index([settingId])
+  @@index([productGid])
+  @@index([productHandle])
+  @@index([variantGid])
+}

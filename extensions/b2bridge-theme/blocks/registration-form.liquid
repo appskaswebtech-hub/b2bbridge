@@ -1,0 +1,318 @@
+{% liquid
+  assign form_id = block.settings.form_id | strip
+  assign heading = block.settings.heading | strip
+%}
+
+<div class="b2bridge-registration-block" {{ block.shopify_attributes }}>
+  {% if heading != blank %}
+    <h2 class="b2bridge-registration-block__heading">{{ heading }}</h2>
+  {% endif %}
+
+  {% if form_id != blank %}
+    <div
+      class="b2bridge-registration-block__mount"
+      data-b2bridge-form-id="{{ form_id | escape }}"
+    >
+      Loading registration form...
+    </div>
+  {% else %}
+    <div class="b2bridge-registration-block__empty">
+      Add a B2Bridge form ID in the block settings.
+    </div>
+  {% endif %}
+</div>
+
+<style>
+  .b2bridge-registration-block {
+    margin: 32px auto;
+    max-width: 960px;
+    width: 100%;
+  }
+
+  .b2bridge-registration-block__heading {
+    margin: 0 0 20px;
+    text-align: center;
+  }
+
+  .b2bridge-registration-block__mount {
+    min-height: 320px;
+  }
+
+  .b2bridge-registration-block__empty {
+    border: 1px dashed rgba(0, 0, 0, 0.24);
+    color: rgba(0, 0, 0, 0.65);
+    padding: 24px;
+    text-align: center;
+  }
+
+  .b2bridge-inline-error,
+  .b2bridge-form-error {
+    color: #d72c0d;
+    margin: 6px 0 0;
+  }
+
+  .b2bridge-form-error {
+    margin: 0 0 14px;
+  }
+
+  .b2bridge-success-message {
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 14px;
+    padding: 28px;
+    text-align: center;
+  }
+</style>
+
+<script>
+  (function () {
+    function getFormIdentifier(value) {
+      var rawValue = String(value || "").trim();
+      var parsedUrl;
+      var path;
+      var parts;
+
+      if (!rawValue) {
+        return "";
+      }
+
+      try {
+        parsedUrl = new URL(rawValue, window.location.origin);
+        path = parsedUrl.pathname;
+      } catch (error) {
+        path = rawValue.split("?")[0];
+      }
+
+      path = path.replace(/\/+$/, "");
+      parts = path.split("/").filter(Boolean);
+
+      if (parts.length >= 3 && parts[0] === "apps" && parts[1] === "b2bridge-4") {
+        return decodeURIComponent(parts[2] || "");
+      }
+
+      if (parts.length >= 2 && parts[0] === "proxy") {
+        return decodeURIComponent(parts[1] || "");
+      }
+
+      return rawValue;
+    }
+
+    function initializeMount(mount) {
+      if (!mount || mount.dataset.b2bridgeLoaded === "true") {
+        return;
+      }
+
+      mount.dataset.b2bridgeLoaded = "true";
+      var formIdentifier = getFormIdentifier(mount.dataset.b2bridgeFormId);
+      var lastFormHtml = "";
+      var fallbackUrl =
+        "/apps/b2bridge-4?formId=" +
+        encodeURIComponent(formIdentifier) +
+        "&embedded=page";
+      var primaryUrl =
+        "/apps/b2bridge-4/" +
+        encodeURIComponent(formIdentifier) +
+        "?embedded=page";
+
+      if (!formIdentifier) {
+        mount.innerHTML = "<p>Registration form ID is missing.</p>";
+        return;
+      }
+
+      function loadFormHtml(urls) {
+        var nextUrl = urls.shift();
+
+        if (!nextUrl) {
+          return Promise.reject(new Error("No registration form endpoint responded."));
+        }
+
+        return fetch(nextUrl, { credentials: "same-origin" }).then(function (response) {
+          if (!response.ok) {
+            throw new Error("Registration form returned " + response.status);
+          }
+
+          return response.text();
+        }).catch(function (error) {
+          if (urls.length) {
+            return loadFormHtml(urls);
+          }
+
+          throw error;
+        });
+      }
+
+      function render(html) {
+        mount.innerHTML = html;
+        var form = mount.querySelector("form");
+        var returnButton = mount.querySelector(".b2b-return-to-form");
+
+        if (!form) {
+          if (returnButton && lastFormHtml) {
+            returnButton.addEventListener("click", function (event) {
+              event.preventDefault();
+              render(lastFormHtml);
+            });
+          }
+
+          return;
+        }
+
+        lastFormHtml = html;
+
+        function clearErrors() {
+          form
+            .querySelectorAll(".b2bridge-inline-error, .b2bridge-form-error")
+            .forEach(function (errorElement) {
+              errorElement.remove();
+            });
+          form
+            .querySelectorAll("[aria-invalid='true']")
+            .forEach(function (input) {
+              input.removeAttribute("aria-invalid");
+            });
+        }
+
+        function showFieldError(fieldName, message) {
+          var escapedFieldName =
+            window.CSS && CSS.escape
+              ? CSS.escape(fieldName)
+              : fieldName.replace(/["\\]/g, "\\$&");
+          var input = form.querySelector("[name='" + escapedFieldName + "']");
+
+          if (!input) {
+            showFormError(message);
+            return;
+          }
+
+          input.setAttribute("aria-invalid", "true");
+          var error = document.createElement("p");
+          error.className = "b2bridge-inline-error";
+          error.textContent = message;
+
+          var fieldContainer = input.closest(".b2b-field, .b2b-checkbox");
+          (fieldContainer || input).insertAdjacentElement("afterend", error);
+          input.focus();
+        }
+
+        function showFormError(message) {
+          var error = document.createElement("p");
+          error.className = "b2bridge-form-error";
+          error.textContent = message;
+          form.insertAdjacentElement("afterbegin", error);
+        }
+
+        function showSuccess(message) {
+          mount.innerHTML =
+            "<section class='b2bridge-success-message'><h2>" +
+            message +
+            "</h2></section>";
+        }
+
+        form.addEventListener("submit", function (event) {
+          event.preventDefault();
+          clearErrors();
+
+          var submitButton = form.querySelector("[type='submit']");
+
+          if (submitButton) {
+            submitButton.setAttribute("disabled", "disabled");
+          }
+
+          fetch(form.action, {
+            method: "POST",
+            body: new FormData(form),
+            credentials: "same-origin",
+            headers: {
+              Accept: "application/json"
+            }
+          })
+            .then(function (response) {
+              return response.json();
+            })
+            .then(function (result) {
+              if (submitButton) {
+                submitButton.removeAttribute("disabled");
+              }
+
+              if (result.ok) {
+                if (result.redirectUrl) {
+                  window.location.href = result.redirectUrl;
+                  return;
+                }
+
+                showSuccess(result.message || "Your registration was submitted successfully.");
+                return;
+              }
+
+              if (result.fieldErrors) {
+                Object.keys(result.fieldErrors).forEach(function (fieldName) {
+                  showFieldError(fieldName, result.fieldErrors[fieldName]);
+                });
+                return;
+              }
+
+              showFormError(result.formError || "Please check the form and try again.");
+            })
+            .catch(function () {
+              if (submitButton) {
+                submitButton.removeAttribute("disabled");
+              }
+
+              mount.innerHTML = "<p>Registration form could not be loaded. Please refresh the page.</p>";
+            });
+        });
+      }
+
+      loadFormHtml([primaryUrl, fallbackUrl])
+        .then(render)
+        .catch(function (error) {
+          mount.innerHTML =
+            "<p>Registration form could not be loaded. Please refresh the page.</p>" +
+            "<p style='font-size: 12px; opacity: .7;'>B2Bridge form ID: " +
+            formIdentifier +
+            "</p>";
+        });
+    }
+
+    function initializeB2BridgeForms() {
+      document
+        .querySelectorAll(".b2bridge-registration-block__mount")
+        .forEach(function (mount) {
+          initializeMount(mount);
+        });
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", initializeB2BridgeForms);
+    } else {
+      initializeB2BridgeForms();
+    }
+
+    document.addEventListener("shopify:section:load", function (event) {
+      event.target
+        .querySelectorAll(".b2bridge-registration-block__mount")
+        .forEach(function (mount) {
+          initializeMount(mount);
+        });
+    });
+  })();
+</script>
+
+{% schema %}
+{
+  "name": "B2Bridge form",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "form_id",
+      "label": "Form ID"
+    },
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "Wholesale registration"
+    }
+  ]
+}
+{% endschema %}
