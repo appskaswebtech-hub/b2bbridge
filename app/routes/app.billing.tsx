@@ -36,7 +36,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const plan = String(formData.get("plan") || "");
   const planDefinition = getPlanDefinition(plan);
@@ -51,7 +51,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  const returnUrl = new URL("/app/billing", request.url).toString();
+  const requestUrl = new URL(request.url);
+  const returnUrl = new URL("/app/billing", request.url);
+  returnUrl.searchParams.set("shop", session.shop);
+
+  const host = requestUrl.searchParams.get("host");
+  if (host) {
+    returnUrl.searchParams.set("host", host);
+    returnUrl.searchParams.set("embedded", "1");
+  }
+
   const response = await admin.graphql(
     `#graphql
       mutation CreateB2BridgeSubscription(
@@ -79,7 +88,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     {
       variables: {
         name: planDefinition.name,
-        returnUrl,
+        returnUrl: returnUrl.toString(),
         test: isBillingTestMode(),
         trialDays: planDefinition.trialDays,
         lineItems: [
