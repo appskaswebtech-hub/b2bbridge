@@ -30,6 +30,7 @@ export default function App() {
           <a href="/app/registration-forms">Registration forms</a>
           <a href="/app/customers">B2B customers</a>
           <a href="/app/wholesale-pricing">Wholesale pricing</a>
+          <a href="/app/additional">Advanced settings</a>
           <a href="/app/billing">Billing</a>
         </ui-nav-menu>
         <Outlet />

@@ -155,7 +155,7 @@ export default function Index() {
                 </Text>
               </BlockStack>
 
-              <InlineGrid columns={{ xs: 1, sm: 3 }} gap="300">
+              <InlineGrid columns={{ xs: 1, sm: 2, lg: 4 }} gap="300">
                 <ActionTile
                   title="Registration forms"
                   description="Design the storefront application and publish it through the theme."
@@ -173,6 +173,12 @@ export default function Index() {
                   description="Apply global discounts or product-level pricing rules."
                   action="Manage pricing"
                   onAction={() => navigate("/app/wholesale-pricing")}
+                />
+                <ActionTile
+                  title="Advanced settings"
+                  description="Open deeper controls for theme integration, checkout, billing, and storefront behavior."
+                  action="Open settings"
+                  onAction={() => navigate("/app/additional")}
                 />
               </InlineGrid>
             </BlockStack>
