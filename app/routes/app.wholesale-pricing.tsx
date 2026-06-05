@@ -28,8 +28,13 @@ import {
 
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
-import { formatLimit, isWithinLimit } from "../billing";
+import { formatLimit, hasProPlan, isWithinLimit } from "../billing";
 import { getBillingStatus } from "../billing.server";
+import {
+  defaultTierPricingRules,
+  parseTierPricingJson,
+  sanitizeTierPricingRules,
+} from "../tier-pricing";
 
 type ProductSelectionOption = {
   label: string;
@@ -45,6 +50,7 @@ type PricingRule = {
   discountPercent: string | null;
   discountAmount: string | null;
   fixedPrice: string | null;
+  tierPricingJson: string;
 };
 
 function cleanPercent(value: FormDataEntryValue | null) {
@@ -126,6 +132,15 @@ function parseProductSelections(value: FormDataEntryValue | null) {
   } catch {
     return [];
   }
+}
+
+function parseTierPricingForm(formData: FormData) {
+  return sanitizeTierPricingRules(
+    [0, 1, 2].map((index) => ({
+      minQuantity: formData.get(`tierMinQuantity${index}`),
+      discountPercent: formData.get(`tierDiscountPercent${index}`),
+    })),
+  );
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -229,8 +244,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "add_rule") {
     const billingStatus = await getBillingStatus(billing);
+    const canUseTierPricing = hasProPlan(billingStatus.currentPlan);
     const selectedProducts = parseProductSelections(formData.get("products"));
     const priceMode = String(formData.get("priceMode") || "percent");
+    const tierPricingRules =
+      priceMode === "tier" ? parseTierPricingForm(formData) : [];
     const discountPercent =
       priceMode === "percent"
         ? cleanPercent(formData.get("discountPercent"))
@@ -245,10 +263,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       };
     }
 
-    if (!discountPercent && !discountAmount) {
+    if (priceMode === "tier" && !canUseTierPricing) {
       return {
         ok: false,
-        error: "Add either a discount percentage or an amount off.",
+        error: "Tier-based wholesale pricing is available on the Pro plan.",
+      };
+    }
+
+    if (
+      !discountPercent &&
+      !discountAmount &&
+      tierPricingRules.length === 0
+    ) {
+      return {
+        ok: false,
+        error: "Add a discount percentage, amount off, or tier pricing rule.",
       };
     }
 
@@ -306,6 +335,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           discountPercent,
           discountAmount,
           fixedPrice: "",
+          tierPricingJson: JSON.stringify(tierPricingRules),
         },
       });
     }
@@ -319,8 +349,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "update_rule") {
+    const billingStatus = await getBillingStatus(billing);
+    const canUseTierPricing = hasProPlan(billingStatus.currentPlan);
     const ruleId = String(formData.get("ruleId") || "");
     const rulePriceMode = String(formData.get("rulePriceMode") || "percent");
+    const tierPricingRules =
+      rulePriceMode === "tier" ? parseTierPricingForm(formData) : [];
     const discountPercent =
       rulePriceMode === "percent"
         ? cleanPercent(formData.get("ruleDiscountPercent"))
@@ -330,10 +364,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         ? cleanMoney(formData.get("ruleDiscountAmount"))
         : "";
 
-    if (!discountPercent && !discountAmount) {
+    if (rulePriceMode === "tier" && !canUseTierPricing) {
       return {
         ok: false,
-        error: "Add either a discount percentage or an amount off.",
+        error: "Tier-based wholesale pricing is available on the Pro plan.",
+      };
+    }
+
+    if (
+      !discountPercent &&
+      !discountAmount &&
+      tierPricingRules.length === 0
+    ) {
+      return {
+        ok: false,
+        error: "Add a discount percentage, amount off, or tier pricing rule.",
       };
     }
 
@@ -346,6 +391,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         discountPercent,
         discountAmount,
         fixedPrice: "",
+        tierPricingJson: JSON.stringify(tierPricingRules),
       },
     });
 
@@ -371,12 +417,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 function PricingRuleEditor({
   rule,
   isSubmitting,
+  canUseTierPricing,
 }: {
   rule: PricingRule;
   isSubmitting: boolean;
+  canUseTierPricing: boolean;
 }) {
+  const savedTierPricingRules = parseTierPricingJson(rule.tierPricingJson);
+  const initialTierPricingRules = savedTierPricingRules.length
+    ? savedTierPricingRules
+    : defaultTierPricingRules;
   const [rulePriceMode, setRulePriceMode] = useState(
-    rule.discountAmount ? "amount" : "percent",
+    savedTierPricingRules.length
+      ? "tier"
+      : rule.discountAmount
+        ? "amount"
+        : "percent",
   );
   const [ruleDiscountPercent, setRuleDiscountPercent] = useState(
     rule.discountPercent || "",
@@ -399,7 +455,10 @@ function PricingRuleEditor({
 
     if (value === "percent") {
       setRuleDiscountAmount("");
+    } else if (value === "amount") {
+      setRuleDiscountPercent("");
     } else {
+      setRuleDiscountAmount("");
       setRuleDiscountPercent("");
     }
   }
@@ -434,6 +493,9 @@ function PricingRuleEditor({
         </InlineStack>
 
         <InlineStack gap="200">
+          {savedTierPricingRules.length ? (
+            <Badge tone="info">Tier pricing</Badge>
+          ) : null}
           {rule.discountPercent ? (
             <Badge tone="success">{`${rule.discountPercent}% off`}</Badge>
           ) : null}
@@ -459,11 +521,18 @@ function PricingRuleEditor({
                 options={[
                   { label: "Percentage", value: "percent" },
                   { label: "Amount off", value: "amount" },
+                  { label: "Quantity tiers", value: "tier" },
                 ]}
                 value={rulePriceMode}
                 onChange={changeRulePriceMode}
               />
-              {rulePriceMode === "percent" ? (
+              {rulePriceMode === "tier" ? (
+                <TierPricingFields
+                  disabled={!canUseTierPricing}
+                  tiers={initialTierPricingRules}
+                  namePrefix="tier"
+                />
+              ) : rulePriceMode === "percent" ? (
                 <TextField
                   label="Percentage"
                   name="ruleDiscountPercent"
@@ -488,8 +557,17 @@ function PricingRuleEditor({
                 />
               )}
             </InlineGrid>
+            {rulePriceMode === "tier" && !canUseTierPricing ? (
+              <Banner tone="warning">
+                Tier-based wholesale pricing is a Pro plan feature.
+              </Banner>
+            ) : null}
             <InlineStack align="end">
-              <Button submit loading={isSubmitting}>
+              <Button
+                submit
+                loading={isSubmitting}
+                disabled={rulePriceMode === "tier" && !canUseTierPricing}
+              >
                 Save rule
               </Button>
             </InlineStack>
@@ -497,6 +575,54 @@ function PricingRuleEditor({
         </Form>
       </BlockStack>
     </Box>
+  );
+}
+
+function TierPricingFields({
+  disabled,
+  tiers,
+  namePrefix,
+}: {
+  disabled: boolean;
+  tiers: { minQuantity: number; discountPercent: number }[];
+  namePrefix: "tier";
+}) {
+  const normalizedTiers = Array.from(
+    { length: 3 },
+    (_, index) => tiers[index] || defaultTierPricingRules[index],
+  );
+
+  return (
+    <BlockStack gap="200">
+      {normalizedTiers.map((tier, index) => (
+        <InlineGrid
+          key={index}
+          columns={{ xs: 1, sm: "minmax(0, 1fr) minmax(0, 1fr)" }}
+          gap="200"
+        >
+          <TextField
+            label={`Tier ${index + 1} minimum quantity`}
+            name={`${namePrefix}MinQuantity${index}`}
+            type="number"
+            min={2}
+            value={String(tier.minQuantity)}
+            disabled={disabled}
+            autoComplete="off"
+          />
+          <TextField
+            label={`Tier ${index + 1} discount`}
+            name={`${namePrefix}DiscountPercent${index}`}
+            type="number"
+            min={0}
+            max={100}
+            suffix="%"
+            value={String(tier.discountPercent)}
+            disabled={disabled}
+            autoComplete="off"
+          />
+        </InlineGrid>
+      ))}
+    </BlockStack>
   );
 }
 
@@ -580,6 +706,7 @@ export default function WholesalePricingPage() {
   const [discountAmount, setDiscountAmount] = useState("");
   const [draftReady, setDraftReady] = useState(false);
   const productRuleLimitLabel = formatLimit(billing.limits.products);
+  const canUseTierPricing = hasProPlan(billing.currentPlan);
   const canAddProductRule = isWithinLimit(
     setting.productRules.length,
     billing.limits.products,
@@ -600,7 +727,10 @@ export default function WholesalePricingPage() {
 
     if (value[0] === "percent") {
       setDiscountAmount("");
+    } else if (value[0] === "amount") {
+      setDiscountPercent("");
     } else {
+      setDiscountAmount("");
       setDiscountPercent("");
     }
   }
@@ -616,7 +746,11 @@ export default function WholesalePricingPage() {
           setSelectedProducts(draft.selectedProducts);
         }
 
-        if (draft.priceMode === "amount" || draft.priceMode === "percent") {
+        if (
+          draft.priceMode === "amount" ||
+          draft.priceMode === "percent" ||
+          draft.priceMode === "tier"
+        ) {
           setPriceMode([draft.priceMode]);
         }
 
@@ -1450,13 +1584,25 @@ export default function WholesalePricingPage() {
                               label: "Fixed amount off",
                               value: "amount",
                             },
+                            {
+                              label: "Quantity tiers",
+                              value: "tier",
+                              helpText:
+                                "Pro plan only. Example: 10+ gets 10%, 50+ gets 20%, 100+ gets 30%.",
+                            },
                           ]}
                           selected={priceMode}
                           onChange={changePriceMode}
                         />
 
-                        <Box maxWidth="320px">
-                          {priceMode[0] === "percent" ? (
+                        <Box maxWidth={priceMode[0] === "tier" ? "100%" : "320px"}>
+                          {priceMode[0] === "tier" ? (
+                            <TierPricingFields
+                              disabled={!canUseTierPricing}
+                              tiers={defaultTierPricingRules}
+                              namePrefix="tier"
+                            />
+                          ) : priceMode[0] === "percent" ? (
                             <TextField
                               label="Percentage off"
                               name="discountPercent"
@@ -1482,11 +1628,27 @@ export default function WholesalePricingPage() {
                           )}
                         </Box>
 
+                        {priceMode[0] === "tier" && !canUseTierPricing ? (
+                          <Banner
+                            tone="warning"
+                            action={{
+                              content: "Upgrade plan",
+                              url: "/app/billing",
+                            }}
+                          >
+                            Tier-based wholesale pricing is available on the Pro
+                            plan.
+                          </Banner>
+                        ) : null}
+
                         <InlineStack align="end">
                           <Button
                             submit
                             loading={isSubmitting}
-                            disabled={!canAddProductRule}
+                            disabled={
+                              !canAddProductRule ||
+                              (priceMode[0] === "tier" && !canUseTierPricing)
+                            }
                           >
                             Save product rule
                           </Button>
@@ -1525,6 +1687,7 @@ export default function WholesalePricingPage() {
                         key={rule.id}
                         rule={rule}
                         isSubmitting={isSubmitting}
+                        canUseTierPricing={canUseTierPricing}
                       />
                     ))}
                   </BlockStack>

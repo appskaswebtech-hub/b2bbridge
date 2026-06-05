@@ -111,6 +111,10 @@ export function isWithinLimit(currentCount: number, limit: number | null) {
   return limit === null || currentCount < limit;
 }
 
+export function hasProPlan(planName?: string | null) {
+  return planName === PRO_PLAN;
+}
+
 export function getCurrentPlanName(
   appSubscriptions: { name: string }[] = [],
 ): PlanName | null {

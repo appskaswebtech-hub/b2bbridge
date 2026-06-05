@@ -410,7 +410,10 @@
       var showCompare = display.showCompare;
       var showDiscount = display.showDiscount;
 
-      if (pricing.discountPercent) {
+      if (pricing.tierApplied && pricing.tierMinQuantity && pricing.tierDiscountPercent) {
+        discountLabel =
+          pricing.tierMinQuantity + "+ qty: " + pricing.tierDiscountPercent + "% off";
+      } else if (pricing.discountPercent) {
         discountLabel = pricing.discountPercent + "% off";
       } else if (pricing.discountAmount) {
         discountLabel = formatMoney(pricing.discountAmount) + " off";
@@ -616,7 +619,32 @@
       });
     }
 
+    function findProductQuantityInput() {
+      var productInfo = findProductInfoContainer();
+
+      return (
+        (productInfo &&
+          productInfo.querySelector(
+            "input[name='quantity'], quantity-input input, .quantity__input"
+          )) ||
+        document.querySelector(
+          "form[action*='/cart/add'] input[name='quantity'], quantity-input input, .quantity__input"
+        )
+      );
+    }
+
+    function getProductPageQuantity() {
+      var input = findProductQuantityInput();
+      var quantity = Number(input && input.value ? input.value : 1);
+
+      return Number.isFinite(quantity) && quantity > 0 ? Math.floor(quantity) : 1;
+    }
+
     function loadPricing(item) {
+      var quantity =
+        isProductPage && item.handle === currentProductHandle
+          ? getProductPageQuantity()
+          : Number(item.quantity || 1);
       var endpoint =
         "/apps/b2bridge-4/pricing?product_id=" +
         encodeURIComponent(item.productId) +
@@ -626,6 +654,8 @@
         encodeURIComponent(item.handle) +
         "&price=" +
         encodeURIComponent(item.price) +
+        "&quantity=" +
+        encodeURIComponent(quantity) +
         "&theme_customer_verified=" +
         (hasWholesaleTag ? "1" : "0");
 
@@ -1033,6 +1063,8 @@
                   encodeURIComponent(item.handle || "") +
                   "&price=" +
                   encodeURIComponent(unitPrice) +
+                  "&quantity=" +
+                  encodeURIComponent(item.quantity || 1) +
                   "&theme_customer_verified=" +
                   (hasWholesaleTag ? "1" : "0"),
                 { credentials: "same-origin" }
@@ -1076,6 +1108,7 @@
     }
 
     var cartRefreshTimer = null;
+    var productPricingTimer = null;
 
     function scheduleCartWholesaleRefresh() {
       if (hasWholesaleTag) {
@@ -1090,6 +1123,21 @@
       scheduleCartWholesaleRefresh();
       window.setTimeout(refreshCartWholesalePrices, 800);
       window.setTimeout(refreshCartWholesalePrices, 1500);
+    }
+
+    function scheduleProductPricingRefresh() {
+      if (!isProductPage || !pricingItems || !pricingItems.length) {
+        return;
+      }
+
+      window.clearTimeout(productPricingTimer);
+      productPricingTimer = window.setTimeout(function () {
+        pricingItems
+          .filter(function (item) {
+            return item.handle === currentProductHandle;
+          })
+          .forEach(loadPricing);
+      }, 200);
     }
 
     function handleCheckoutEvent(event, trigger) {
@@ -1186,6 +1234,26 @@
         target.matches("input[name='updates[]'], input[name^='updates'], quantity-input input")
       ) {
         scheduleCartWholesaleRefresh();
+      }
+
+      if (
+        target &&
+        target.matches &&
+        target.matches("input[name='quantity'], quantity-input input, .quantity__input")
+      ) {
+        scheduleProductPricingRefresh();
+      }
+    });
+
+    document.addEventListener("input", function (event) {
+      var target = event.target;
+
+      if (
+        target &&
+        target.matches &&
+        target.matches("input[name='quantity'], quantity-input input, .quantity__input")
+      ) {
+        scheduleProductPricingRefresh();
       }
     });
 

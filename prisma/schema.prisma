@@ -206,6 +206,7 @@ model WholesaleProductPricingRule {
   discountPercent String?
   discountAmount  String?
   fixedPrice      String?
+  tierPricingJson String  @default("[]")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

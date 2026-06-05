@@ -2,6 +2,11 @@ import type { LoaderFunctionArgs } from "react-router";
 
 import db from "../db.server";
 import { authenticate, unauthenticated } from "../shopify.server";
+import {
+  getBestTierPricingRule,
+  parseTierPricingJson,
+  type TierPricingRule,
+} from "../tier-pricing";
 
 function normalizeProductGid(productId?: string | null) {
   const value = String(productId || "").trim();
@@ -61,6 +66,12 @@ function calculateWholesalePrice({
   }
 
   return Math.max(price * (1 - percent / 100), 0);
+}
+
+function normalizeQuantity(value?: string | null) {
+  const quantity = Math.floor(Number(value || "1"));
+
+  return Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
 }
 
 function normalizeCustomerGid(customerId?: string | null) {
@@ -136,6 +147,7 @@ function getRulePricing({
     discountPercent?: string | null;
     discountAmount?: string | null;
     fixedPrice?: string | null;
+    tierPricingJson?: string | null;
   } | null;
   setting: {
     pricingMode?: string | null;
@@ -148,6 +160,7 @@ function getRulePricing({
       discountPercent: setting.globalDiscountPercent,
       discountAmount: setting.globalDiscountAmount,
       fixedPrice: null,
+      tierPricingRules: [],
       ruleType: "global",
     };
   }
@@ -157,6 +170,7 @@ function getRulePricing({
       discountPercent: productRule.discountPercent,
       discountAmount: productRule.discountAmount,
       fixedPrice: productRule.fixedPrice,
+      tierPricingRules: parseTierPricingJson(productRule.tierPricingJson),
       ruleType: "product",
     };
   }
@@ -165,7 +179,29 @@ function getRulePricing({
     discountPercent: null,
     discountAmount: null,
     fixedPrice: null,
+    tierPricingRules: [],
     ruleType: "none",
+  };
+}
+
+function applyTierPricing({
+  price,
+  quantity,
+  tierPricingRules,
+}: {
+  price: number;
+  quantity: number;
+  tierPricingRules: TierPricingRule[];
+}) {
+  const tier = getBestTierPricingRule(tierPricingRules, quantity);
+
+  if (!tier) {
+    return null;
+  }
+
+  return {
+    tier,
+    wholesalePrice: Math.max(price * (1 - tier.discountPercent / 100), 0),
   };
 }
 
@@ -228,6 +264,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const variantGid = normalizeVariantGid(url.searchParams.get("variant_id"));
   const productHandle = String(url.searchParams.get("handle") || "").trim();
   const price = Number(url.searchParams.get("price") || "");
+  const quantity = normalizeQuantity(url.searchParams.get("quantity"));
 
   if (!shop || !Number.isFinite(price) || price <= 0) {
     return Response.json({ ok: false }, { status: 400 });
@@ -288,12 +325,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       );
     }) || null;
   const rulePricing = getRulePricing({ productRule, setting });
-  const wholesalePrice = calculateWholesalePrice({
-    price,
-    discountPercent: rulePricing.discountPercent,
-    discountAmount: rulePricing.discountAmount,
-    fixedPrice: rulePricing.fixedPrice,
-  });
+  const tierPricing =
+    rulePricing.ruleType === "product"
+      ? applyTierPricing({
+          price,
+          quantity,
+          tierPricingRules: rulePricing.tierPricingRules || [],
+        })
+      : null;
+  const wholesalePrice =
+    tierPricing?.wholesalePrice ??
+    calculateWholesalePrice({
+      price,
+      discountPercent: rulePricing.discountPercent,
+      discountAmount: rulePricing.discountAmount,
+      fixedPrice: rulePricing.fixedPrice,
+    });
 
   if (wholesalePrice === null || wholesalePrice >= price) {
     return Response.json({
@@ -312,9 +359,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     pricingMode: setting.pricingMode,
     productHandle,
     matchedRule: Boolean(productRule),
+    quantity,
     wholesalePrice,
-    discountPercent: rulePricing.discountPercent || "",
-    discountAmount: rulePricing.discountAmount || "",
+    discountPercent: tierPricing
+      ? String(tierPricing.tier.discountPercent)
+      : rulePricing.discountPercent || "",
+    discountAmount: tierPricing ? "" : rulePricing.discountAmount || "",
+    tierApplied: Boolean(tierPricing),
+    tierMinQuantity: tierPricing?.tier.minQuantity || null,
+    tierDiscountPercent: tierPricing?.tier.discountPercent || null,
+    tierPricingRules: rulePricing.tierPricingRules || [],
     ruleType: rulePricing.ruleType,
     display: getDisplaySettings(setting),
   });
