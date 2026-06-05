@@ -5,36 +5,36 @@ name = "B2Bridge"
 application_url = "https://b2bridge.kaswebtechsolutions.com"
 embedded = true
 
-[access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_products,write_app_proxy,read_customers,write_customers,write_draft_orders"
-
-[app_proxy]
-url = "/proxy"
-prefix = "apps"
-subpath = "b2bridge-4"
+[build]
+automatically_update_urls_on_dev = true
 
 [webhooks]
 api_version = "2026-04"
 
   [[webhooks.subscriptions]]
-  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
-  uri = "/webhooks/compliance"
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/uninstalled"
   topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/app/scopes_update"
   topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/customers/delete"
   topics = [ "customers/delete" ]
+  uri = "/webhooks/customers/delete"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers,read_products,write_app_proxy,write_customers,write_draft_orders"
 
 [auth]
 redirect_urls = [ "https://b2bridge.kaswebtechsolutions.com/api/auth" ]
 
-[build]
-automatically_update_urls_on_dev = true
+[app_proxy]
+url = "https://b2bridge.kaswebtechsolutions.com/proxy"
+subpath = "b2bridge-4"
+prefix = "apps"
