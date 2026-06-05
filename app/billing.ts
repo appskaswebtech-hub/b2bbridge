@@ -2,6 +2,7 @@ export const BASIC_PLAN = "Basic plan";
 export const ADVANCE_PLAN = "Advance plan";
 export const PRO_PLAN = "Pro plan";
 export const BILLING_PLANS = [BASIC_PLAN, ADVANCE_PLAN, PRO_PLAN] as const;
+export const SHOPIFY_ADMIN_APP_HANDLE = "b2bridge-4";
 
 export type PlanName = (typeof BILLING_PLANS)[number];
 
@@ -118,4 +119,11 @@ export function getCurrentPlanName(
   );
 
   return activePlan?.name || null;
+}
+
+export function createShopifyAdminAppUrl(shop: string, path = "/app") {
+  const shopHandle = shop.replace(".myshopify.com", "");
+  const appPath = path.startsWith("/") ? path : `/${path}`;
+
+  return `https://admin.shopify.com/store/${shopHandle}/apps/${SHOPIFY_ADMIN_APP_HANDLE}${appPath}`;
 }

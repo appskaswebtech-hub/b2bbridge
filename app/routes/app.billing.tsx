@@ -18,6 +18,7 @@ import {
 
 import {
   BILLING_PLANS,
+  createShopifyAdminAppUrl,
   formatLimit,
   getPlanDefinition,
   PLAN_DEFINITIONS,
@@ -51,15 +52,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  const requestUrl = new URL(request.url);
-  const returnUrl = new URL("/app/billing", request.url);
-  returnUrl.searchParams.set("shop", session.shop);
-
-  const host = requestUrl.searchParams.get("host");
-  if (host) {
-    returnUrl.searchParams.set("host", host);
-    returnUrl.searchParams.set("embedded", "1");
-  }
+  const returnUrl = createShopifyAdminAppUrl(session.shop, "/app");
 
   const response = await admin.graphql(
     `#graphql
@@ -88,7 +81,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     {
       variables: {
         name: planDefinition.name,
-        returnUrl: returnUrl.toString(),
+        returnUrl,
         test: isBillingTestMode(),
         trialDays: planDefinition.trialDays,
         lineItems: [
