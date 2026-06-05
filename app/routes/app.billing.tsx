@@ -15,7 +15,7 @@ import {
 } from "@shopify/polaris";
 
 import { BILLING_PLANS, formatLimit, PLAN_DEFINITIONS } from "../billing";
-import { getBillingStatus } from "../billing.server";
+import { getBillingStatus, isBillingTestMode } from "../billing.server";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -44,7 +44,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   return billing.request({
     plan: plan as (typeof BILLING_PLANS)[number],
-    isTest: process.env.SHOPIFY_BILLING_TEST === "true",
+    isTest: isBillingTestMode(),
     returnUrl,
   });
 };

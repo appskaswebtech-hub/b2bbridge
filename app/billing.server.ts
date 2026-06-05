@@ -3,10 +3,14 @@ import { BILLING_PLANS, getCurrentPlanName, getPlanLimits } from "./billing";
 
 type Billing = Awaited<ReturnType<typeof authenticate.admin>>["billing"];
 
+export function isBillingTestMode() {
+  return process.env.SHOPIFY_BILLING_TEST !== "false";
+}
+
 export async function getBillingStatus(billing: Billing) {
   const billingCheck = await billing.check({
     plans: [...BILLING_PLANS],
-    isTest: process.env.SHOPIFY_BILLING_TEST === "true",
+    isTest: isBillingTestMode(),
   });
   const currentPlan = getCurrentPlanName(billingCheck.appSubscriptions);
 
