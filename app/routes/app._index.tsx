@@ -1,5 +1,5 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useRouteError } from "react-router";
+import { useLoaderData, useNavigate, useRouteError } from "react-router";
 
 import {
   Badge,
@@ -67,6 +67,7 @@ export default function Index() {
     pendingCustomers,
     pricingSetting,
   } = useLoaderData<typeof loader>();
+  const navigate = useNavigate();
   const pricingEnabled = Boolean(pricingSetting?.enabled);
   const pricingMode =
     pricingSetting?.pricingMode === "specific" ? "Specific rules" : "Global";
@@ -112,9 +113,16 @@ export default function Index() {
               </BlockStack>
 
               <InlineStack gap="200">
-                <Button url="/app/registration-forms">Registration</Button>
-                <Button url="/app/customers">Approvals</Button>
-                <Button url="/app/wholesale-pricing" variant="primary">
+                <Button onClick={() => navigate("/app/registration-forms")}>
+                  Registration
+                </Button>
+                <Button onClick={() => navigate("/app/customers")}>
+                  Approvals
+                </Button>
+                <Button
+                  onClick={() => navigate("/app/wholesale-pricing")}
+                  variant="primary"
+                >
                   Pricing
                 </Button>
               </InlineStack>
@@ -152,19 +160,19 @@ export default function Index() {
                   title="Registration forms"
                   description="Design the storefront application and publish it through the theme."
                   action="Manage forms"
-                  url="/app/registration-forms"
+                  onAction={() => navigate("/app/registration-forms")}
                 />
                 <ActionTile
                   title="Customer approvals"
                   description="Review applications and mark wholesale accounts as approved."
                   action="Review applicants"
-                  url="/app/customers"
+                  onAction={() => navigate("/app/customers")}
                 />
                 <ActionTile
                   title="Wholesale pricing"
                   description="Apply global discounts or product-level pricing rules."
                   action="Manage pricing"
-                  url="/app/wholesale-pricing"
+                  onAction={() => navigate("/app/wholesale-pricing")}
                 />
               </InlineGrid>
             </BlockStack>
@@ -198,7 +206,9 @@ export default function Index() {
                 </Text>
               </BlockStack>
 
-              <Button url="/app/wholesale-pricing">Configure pricing</Button>
+              <Button onClick={() => navigate("/app/wholesale-pricing")}>
+                Configure pricing
+              </Button>
             </BlockStack>
           </Card>
         </InlineGrid>
@@ -237,12 +247,12 @@ function ActionTile({
   title,
   description,
   action,
-  url,
+  onAction,
 }: {
   title: string;
   description: string;
   action: string;
-  url: string;
+  onAction: () => void;
 }) {
   return (
     <Box
@@ -261,7 +271,7 @@ function ActionTile({
             {description}
           </Text>
         </BlockStack>
-        <Button url={url}>{action}</Button>
+        <Button onClick={onAction}>{action}</Button>
       </BlockStack>
     </Box>
   );
