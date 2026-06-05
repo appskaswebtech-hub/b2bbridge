@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useLoaderData, useNavigation } from "react-router";
+import { data, Form, useLoaderData, useNavigation } from "react-router";
 
 import {
   Badge,
@@ -34,12 +34,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const plan = String(formData.get("plan") || "");
 
   if (!BILLING_PLANS.includes(plan as (typeof BILLING_PLANS)[number])) {
-    return { ok: false, error: "Select a valid billing plan." };
+    return data(
+      { ok: false, error: "Select a valid billing plan." },
+      { status: 400 },
+    );
   }
+
+  const returnUrl = new URL("/app/billing", request.url).toString();
 
   return billing.request({
     plan: plan as (typeof BILLING_PLANS)[number],
     isTest: process.env.SHOPIFY_BILLING_TEST === "true",
+    returnUrl,
   });
 };
 
