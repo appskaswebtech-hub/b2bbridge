@@ -28,6 +28,8 @@ import {
 
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
+import { formatLimit, isWithinLimit } from "../billing";
+import { getBillingStatus } from "../billing.server";
 
 type ProductSelectionOption = {
   label: string;
@@ -127,14 +129,22 @@ function parseProductSelections(value: FormDataEntryValue | null) {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { billing, session } = await authenticate.admin(request);
+  const billingStatus = await getBillingStatus(billing);
   const setting = await requireSetting(session.shop);
 
-  return { setting };
+  return {
+    billing: {
+      currentPlan: billingStatus.currentPlan,
+      limits: billingStatus.limits,
+      hasActivePayment: billingStatus.hasActivePayment,
+    },
+    setting,
+  };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { billing, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "save_settings");
   const setting = await requireSetting(session.shop);
@@ -176,10 +186,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         productShowLabel: formData.get("productShowLabel") === "on",
         productShowCompare: formData.get("productShowCompare") === "on",
         productShowDiscount: formData.get("productShowDiscount") === "on",
-        productFontSize: cleanFontSize(
-          formData.get("productFontSize"),
-          "18",
-        ),
+        productFontSize: cleanFontSize(formData.get("productFontSize"), "18"),
         productAccentColor: cleanColor(
           formData.get("productAccentColor"),
           "#111827",
@@ -199,8 +206,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         ),
         collectionShowLabel: formData.get("collectionShowLabel") === "on",
         collectionShowCompare: formData.get("collectionShowCompare") === "on",
-        collectionShowDiscount:
-          formData.get("collectionShowDiscount") === "on",
+        collectionShowDiscount: formData.get("collectionShowDiscount") === "on",
         collectionFontSize: cleanFontSize(
           formData.get("collectionFontSize"),
           "13",
@@ -222,6 +228,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "add_rule") {
+    const billingStatus = await getBillingStatus(billing);
     const selectedProducts = parseProductSelections(formData.get("products"));
     const priceMode = String(formData.get("priceMode") || "percent");
     const discountPercent =
@@ -242,6 +249,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return {
         ok: false,
         error: "Add either a discount percentage or an amount off.",
+      };
+    }
+
+    const existingRules = await db.wholesaleProductPricingRule.findMany({
+      where: {
+        shop: session.shop,
+        settingId: setting.id,
+      },
+      select: {
+        productGid: true,
+        variantGid: true,
+      },
+    });
+    const existingKeys = new Set(
+      existingRules.map((rule) => rule.variantGid || rule.productGid || ""),
+    );
+    const newRuleCount = selectedProducts.filter(
+      (product) =>
+        !existingKeys.has(product.variantGid || product.productGid || ""),
+    ).length;
+
+    if (
+      billingStatus.limits.products !== null &&
+      existingRules.length + newRuleCount > billingStatus.limits.products
+    ) {
+      return {
+        ok: false,
+        error: `Your current plan allows ${formatLimit(
+          billingStatus.limits.products,
+        )} product pricing rules. Upgrade your plan to add more products.`,
       };
     }
 
@@ -464,7 +501,7 @@ function PricingRuleEditor({
 }
 
 export default function WholesalePricingPage() {
-  const { setting } = useLoaderData<typeof loader>();
+  const { billing, setting } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const shopify = useAppBridge();
@@ -542,6 +579,11 @@ export default function WholesalePricingPage() {
   const [discountPercent, setDiscountPercent] = useState("");
   const [discountAmount, setDiscountAmount] = useState("");
   const [draftReady, setDraftReady] = useState(false);
+  const productRuleLimitLabel = formatLimit(billing.limits.products);
+  const canAddProductRule = isWithinLimit(
+    setting.productRules.length,
+    billing.limits.products,
+  );
 
   function changeGlobalPriceMode(value: string[]) {
     setGlobalPriceMode(value);
@@ -696,6 +738,9 @@ export default function WholesalePricingPage() {
                   <Badge tone="info">B2Bridge</Badge>
                   <Badge tone={setting.enabled ? "success" : "attention"}>
                     {setting.enabled ? "Enabled" : "Disabled"}
+                  </Badge>
+                  <Badge tone={billing.currentPlan ? "success" : "attention"}>
+                    {billing.currentPlan || "No plan"}
                   </Badge>
                 </InlineStack>
                 <BlockStack gap="100">
@@ -885,7 +930,10 @@ export default function WholesalePricingPage() {
                         background="bg-surface"
                       >
                         <BlockStack gap="400">
-                          <InlineStack align="space-between" blockAlign="center">
+                          <InlineStack
+                            align="space-between"
+                            blockAlign="center"
+                          >
                             <BlockStack gap="050">
                               <Text as="h3" variant="headingMd">
                                 Product page
@@ -1066,14 +1114,17 @@ export default function WholesalePricingPage() {
                         background="bg-surface"
                       >
                         <BlockStack gap="400">
-                          <InlineStack align="space-between" blockAlign="center">
+                          <InlineStack
+                            align="space-between"
+                            blockAlign="center"
+                          >
                             <BlockStack gap="050">
                               <Text as="h3" variant="headingMd">
                                 Collection cards
                               </Text>
                               <Text as="p" variant="bodySm" tone="subdued">
-                                Keep cards compact so prices do not collide
-                                with neighboring products.
+                                Keep cards compact so prices do not collide with
+                                neighboring products.
                               </Text>
                             </BlockStack>
                             <Badge tone="success">Recommended</Badge>
@@ -1151,8 +1202,7 @@ export default function WholesalePricingPage() {
                                 },
                               ]}
                               value={
-                                collectionPricePlacement[0] ||
-                                "replace_price"
+                                collectionPricePlacement[0] || "replace_price"
                               }
                               onChange={(value) =>
                                 setCollectionPricePlacement([value])
@@ -1222,8 +1272,7 @@ export default function WholesalePricingPage() {
                             />
                           ) : null}
 
-                          {collectionPricePlacement[0] ===
-                          "custom_selector" ? (
+                          {collectionPricePlacement[0] === "custom_selector" ? (
                             <BlockStack gap="300">
                               <TextField
                                 label="Collection card selector"
@@ -1297,6 +1346,19 @@ export default function WholesalePricingPage() {
                       </Text>
                     </BlockStack>
 
+                    {!canAddProductRule ? (
+                      <Banner
+                        tone="warning"
+                        action={{
+                          content: "Upgrade plan",
+                          url: "/app/billing",
+                        }}
+                      >
+                        Your current plan allows {productRuleLimitLabel} product
+                        pricing rules. Upgrade to add more products.
+                      </Banner>
+                    ) : null}
+
                     <BlockStack gap="300">
                       <InlineStack align="space-between" blockAlign="center">
                         <BlockStack gap="050">
@@ -1307,10 +1369,17 @@ export default function WholesalePricingPage() {
                             Pick one or more products from the Shopify catalog.
                           </Text>
                         </BlockStack>
-                        <Button onClick={openProductPicker}>
+                        <Button
+                          onClick={
+                            canAddProductRule ? openProductPicker : undefined
+                          }
+                          url={!canAddProductRule ? "/app/billing" : undefined}
+                        >
                           {selectedProducts.length
                             ? "Change products"
-                            : "Select products"}
+                            : canAddProductRule
+                              ? "Select products"
+                              : "Upgrade plan"}
                         </Button>
                       </InlineStack>
 
@@ -1414,7 +1483,11 @@ export default function WholesalePricingPage() {
                         </Box>
 
                         <InlineStack align="end">
-                          <Button submit loading={isSubmitting}>
+                          <Button
+                            submit
+                            loading={isSubmitting}
+                            disabled={!canAddProductRule}
+                          >
                             Save product rule
                           </Button>
                         </InlineStack>

@@ -11,6 +11,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { formatLimit, isWithinLimit } from "../billing";
+import { getBillingStatus } from "../billing.server";
 
 import {
   Badge,
@@ -145,7 +147,8 @@ function createStorefrontUrl(shop: string, previewUrl: string) {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { billing, session } = await authenticate.admin(request);
+  const billingStatus = await getBillingStatus(billing);
 
   const forms = await db.wholesaleForm.findMany({
     where: { shop: session.shop },
@@ -159,6 +162,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   return {
+    billing: {
+      currentPlan: billingStatus.currentPlan,
+      limits: billingStatus.limits,
+      hasActivePayment: billingStatus.hasActivePayment,
+    },
     forms: forms.map((form) => ({
       ...form,
       storefrontUrl: createStorefrontUrl(session.shop, form.previewUrl),
@@ -167,7 +175,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { billing, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "save_general");
 
@@ -175,12 +183,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const formId = String(formData.get("formId") || "");
     const title = String(formData.get("title") || "").trim();
     const status = formData.get("published") === "on" ? "active" : "draft";
+    const billingStatus = await getBillingStatus(billing);
 
     if (!title) {
       return { ok: false, error: "Form name is required" };
     }
 
     const existingForm = await requireForm(formId, session.shop);
+
+    if (!existingForm) {
+      const currentFormCount = await db.wholesaleForm.count({
+        where: { shop: session.shop },
+      });
+
+      if (!isWithinLimit(currentFormCount, billingStatus.limits.forms)) {
+        return {
+          ok: false,
+          error: `Your current plan allows ${formatLimit(
+            billingStatus.limits.forms,
+          )} forms. Upgrade your plan to create more forms.`,
+        };
+      }
+    }
+
     const nextFormId = existingForm?.id || crypto.randomUUID();
     const previewUrl = createProxyFormUrl(nextFormId);
 
@@ -395,7 +420,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function RegistrationFormsPage() {
-  const { forms } = useLoaderData<typeof loader>();
+  const { billing, forms } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -450,6 +475,8 @@ export default function RegistrationFormsPage() {
   const currentStepLabel = stepTitles[stepNumber - 1] || "General";
   const activeForms = forms.filter((form) => form.status === "active").length;
   const draftForms = forms.length - activeForms;
+  const canCreateForm = isWithinLimit(forms.length, billing.limits.forms);
+  const formLimitLabel = formatLimit(billing.limits.forms);
 
   useEffect(() => {
     if (!currentForm || !isCreating) {
@@ -532,6 +559,10 @@ export default function RegistrationFormsPage() {
   }
 
   function startCreate() {
+    if (!canCreateForm) {
+      return;
+    }
+
     resetFormState();
     setSearchParams({ view: "new", step: "1" });
   }
@@ -671,9 +702,10 @@ export default function RegistrationFormsPage() {
                         subtitle="Name the application, review the storefront URL, and control publishing."
                       />
 
-                      <Banner tone="warning">
-                        You have not subscribed to a pricing plan. To make this
-                        form active on storefront, connect a pricing plan later.
+                      <Banner tone={billing.currentPlan ? "info" : "warning"}>
+                        {billing.currentPlan
+                          ? `${billing.currentPlan} includes ${formLimitLabel} forms.`
+                          : "Choose a billing plan to publish registration forms on the storefront."}
                       </Banner>
 
                       <Divider />
@@ -1248,6 +1280,9 @@ export default function RegistrationFormsPage() {
                 <InlineStack gap="200" blockAlign="center">
                   <Badge tone="info">B2Bridge</Badge>
                   <Badge tone="success">Storefront proxy ready</Badge>
+                  <Badge tone={billing.currentPlan ? "success" : "attention"}>
+                    {billing.currentPlan || "No plan"}
+                  </Badge>
                 </InlineStack>
 
                 <BlockStack gap="100">
@@ -1261,20 +1296,35 @@ export default function RegistrationFormsPage() {
                 </BlockStack>
               </BlockStack>
 
-              <Button variant="primary" onClick={startCreate}>
-                New form
+              <Button
+                variant="primary"
+                onClick={canCreateForm ? startCreate : undefined}
+                url={!canCreateForm ? "/app/billing" : undefined}
+              >
+                {canCreateForm ? "New form" : "Upgrade plan"}
               </Button>
             </InlineGrid>
           </Box>
 
           <Box padding="400">
-            <InlineGrid columns={{ xs: 1, sm: 3 }} gap="300">
+            <InlineGrid columns={{ xs: 1, sm: 2, md: 4 }} gap="300">
               <MetricTile label="Forms created" value={String(forms.length)} />
+              <MetricTile label="Plan limit" value={formLimitLabel} />
               <MetricTile label="Live forms" value={String(activeForms)} />
               <MetricTile label="Draft" value={String(draftForms)} />
             </InlineGrid>
           </Box>
         </Card>
+
+        {!canCreateForm ? (
+          <Banner
+            tone="warning"
+            action={{ content: "Upgrade plan", url: "/app/billing" }}
+          >
+            Your current plan allows {formLimitLabel} forms. Upgrade to create
+            more registration forms.
+          </Banner>
+        ) : null}
 
         <Card>
           {actionData?.ok === false && actionData.error ? (
@@ -1293,8 +1343,10 @@ export default function RegistrationFormsPage() {
             <EmptyState
               heading="No wholesale forms yet"
               action={{
-                content: "Create first form",
-                onAction: startCreate,
+                content: canCreateForm ? "Create first form" : "Choose plan",
+                ...(canCreateForm
+                  ? { onAction: startCreate }
+                  : { url: "/app/billing" }),
               }}
               image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
             >
@@ -1436,11 +1488,17 @@ export default function RegistrationFormsPage() {
                             blockAlign="center"
                           >
                             <BlockStack gap="050">
-                              <Text as="p" variant="bodySm" fontWeight="semibold">
+                              <Text
+                                as="p"
+                                variant="bodySm"
+                                fontWeight="semibold"
+                              >
                                 Theme page setup
                               </Text>
                               <Text as="p" variant="bodySm" tone="subdued">
-                                In the Shopify theme editor, open your registration page template, add the B2Bridge form app block, then paste this Form ID.
+                                In the Shopify theme editor, open your
+                                registration page template, add the B2Bridge
+                                form app block, then paste this Form ID.
                               </Text>
                             </BlockStack>
                             {copiedUrl === form.id ? (
@@ -1470,7 +1528,9 @@ export default function RegistrationFormsPage() {
                             </Text>
                             <CopyUrlButton
                               label={`Copy direct preview URL for ${form.title}`}
-                              onClick={() => copyUrlToClipboard(form.storefrontUrl)}
+                              onClick={() =>
+                                copyUrlToClipboard(form.storefrontUrl)
+                              }
                             />
                           </InlineGrid>
                         </BlockStack>
