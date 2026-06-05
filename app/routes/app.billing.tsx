@@ -1,5 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { data, Form, useLoaderData, useNavigation } from "react-router";
+import { data, useFetcher, useLoaderData } from "react-router";
+import { useEffect } from "react";
+import { useAppBridge } from "@shopify/app-bridge-react";
 
 import {
   Badge,
@@ -14,7 +16,12 @@ import {
   Text,
 } from "@shopify/polaris";
 
-import { BILLING_PLANS, formatLimit, PLAN_DEFINITIONS } from "../billing";
+import {
+  BILLING_PLANS,
+  formatLimit,
+  getPlanDefinition,
+  PLAN_DEFINITIONS,
+} from "../billing";
 import { getBillingStatus, isBillingTestMode } from "../billing.server";
 import { authenticate } from "../shopify.server";
 
@@ -29,11 +36,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { billing } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
   const plan = String(formData.get("plan") || "");
+  const planDefinition = getPlanDefinition(plan);
 
-  if (!BILLING_PLANS.includes(plan as (typeof BILLING_PLANS)[number])) {
+  if (
+    !BILLING_PLANS.includes(plan as (typeof BILLING_PLANS)[number]) ||
+    !planDefinition
+  ) {
     return data(
       { ok: false, error: "Select a valid billing plan." },
       { status: 400 },
@@ -41,19 +52,100 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const returnUrl = new URL("/app/billing", request.url).toString();
+  const response = await admin.graphql(
+    `#graphql
+      mutation CreateB2BridgeSubscription(
+        $name: String!
+        $returnUrl: URL!
+        $test: Boolean
+        $trialDays: Int
+        $lineItems: [AppSubscriptionLineItemInput!]!
+      ) {
+        appSubscriptionCreate(
+          name: $name
+          returnUrl: $returnUrl
+          test: $test
+          trialDays: $trialDays
+          lineItems: $lineItems
+        ) {
+          confirmationUrl
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `,
+    {
+      variables: {
+        name: planDefinition.name,
+        returnUrl,
+        test: isBillingTestMode(),
+        trialDays: planDefinition.trialDays,
+        lineItems: [
+          {
+            plan: {
+              appRecurringPricingDetails: {
+                interval: "EVERY_30_DAYS",
+                price: {
+                  amount: planDefinition.amount,
+                  currencyCode: "USD",
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+  );
+  const payload = await response.json();
+  const billingResult = payload.data?.appSubscriptionCreate;
+  const userErrors = billingResult?.userErrors || [];
 
-  return billing.request({
-    plan: plan as (typeof BILLING_PLANS)[number],
-    isTest: isBillingTestMode(),
-    returnUrl,
+  if (userErrors.length > 0 || !billingResult?.confirmationUrl) {
+    return data(
+      {
+        ok: false,
+        error:
+          userErrors.map((error: { message: string }) => error.message).join(" ") ||
+          "Could not create billing confirmation.",
+      },
+      { status: 400 },
+    );
+  }
+
+  return data({
+    ok: true,
+    confirmationUrl: billingResult.confirmationUrl,
   });
 };
 
 export default function BillingPage() {
   const { currentPlan, plans } = useLoaderData<typeof loader>();
-  const navigation = useNavigation();
-  const selectedPlan = String(navigation.formData?.get("plan") || "");
-  const isSubmitting = navigation.state === "submitting";
+  const billingFetcher = useFetcher<typeof action>();
+  const shopify = useAppBridge();
+  const selectedPlan = String(billingFetcher.formData?.get("plan") || "");
+  const isSubmitting = billingFetcher.state !== "idle";
+
+  useEffect(() => {
+    const confirmationUrl =
+      billingFetcher.data &&
+      "confirmationUrl" in billingFetcher.data &&
+      billingFetcher.data.confirmationUrl;
+
+    if (!confirmationUrl) {
+      return;
+    }
+
+    const redirect = (shopify as { redirect?: (url: string) => void }).redirect;
+
+    if (redirect) {
+      redirect(confirmationUrl);
+      return;
+    }
+
+    window.open(confirmationUrl, "_top");
+  }, [billingFetcher.data, shopify]);
 
   return (
     <Page title="Billing">
@@ -213,7 +305,7 @@ export default function BillingPage() {
                     </BlockStack>
                   </BlockStack>
 
-                  <Form method="post">
+                  <billingFetcher.Form method="post">
                     <input type="hidden" name="plan" value={plan.name} />
                     <Button
                       submit
@@ -224,7 +316,7 @@ export default function BillingPage() {
                     >
                       {isCurrent ? "Current plan" : `Start ${plan.name}`}
                     </Button>
-                  </Form>
+                  </billingFetcher.Form>
                 </BlockStack>
               </Card>
             );

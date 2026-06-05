@@ -13,6 +13,7 @@ export type PlanLimits = {
 export type PlanDefinition = {
   name: PlanName;
   price: string;
+  amount: number;
   tagline: string;
   description: string;
   trialDays: number;
@@ -26,6 +27,7 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
   {
     name: BASIC_PLAN,
     price: "$15.99",
+    amount: 15.99,
     tagline: "Start selling B2B",
     description:
       "For small wholesale programs that need a clean registration flow and a focused pricing setup.",
@@ -45,6 +47,7 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
   {
     name: ADVANCE_PLAN,
     price: "$39.99",
+    amount: 39.99,
     tagline: "Grow your wholesale program",
     description:
       "For active B2B stores that need more forms, broader product coverage, and room to scale.",
@@ -65,6 +68,7 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
   {
     name: PRO_PLAN,
     price: "$49.99",
+    amount: 49.99,
     tagline: "Scale without limits",
     description:
       "For established wholesale operations that need unlimited forms and catalog-wide flexibility.",
