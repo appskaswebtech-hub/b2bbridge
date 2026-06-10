@@ -2,6 +2,10 @@ import type { ActionFunctionArgs } from "react-router";
 
 import db from "../db.server";
 import { authenticate, unauthenticated } from "../shopify.server";
+import {
+  getBestTierPricingRule,
+  parseTierPricingJson,
+} from "../tier-pricing";
 
 type CartItemInput = {
   productId?: string | number | null;
@@ -90,6 +94,27 @@ function calculateWholesalePrice({
   }
 
   return Math.max(price * (1 - percent / 100), 0);
+}
+
+function calculateTierWholesalePrice({
+  price,
+  quantity,
+  tierPricingJson,
+}: {
+  price: number;
+  quantity: number;
+  tierPricingJson?: string | null;
+}) {
+  const tier = getBestTierPricingRule(
+    parseTierPricingJson(tierPricingJson),
+    quantity,
+  );
+
+  if (!tier) {
+    return null;
+  }
+
+  return Math.max(price * (1 - tier.discountPercent / 100), 0);
 }
 
 async function customerHasWholesaleTag({
@@ -199,14 +224,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               discountPercent: setting.globalDiscountPercent,
               discountAmount: setting.globalDiscountAmount,
               fixedPrice: null,
+              tierPricingJson: "[]",
             }
           : productRule;
-      const wholesalePrice = calculateWholesalePrice({
-        price,
-        discountPercent: rulePricing?.discountPercent,
-        discountAmount: rulePricing?.discountAmount,
-        fixedPrice: rulePricing?.fixedPrice,
-      });
+      const wholesalePrice =
+        setting.pricingMode === "specific"
+          ? (calculateTierWholesalePrice({
+              price,
+              quantity,
+              tierPricingJson: rulePricing?.tierPricingJson,
+            }) ??
+            calculateWholesalePrice({
+              price,
+              discountPercent: rulePricing?.discountPercent,
+              discountAmount: rulePricing?.discountAmount,
+              fixedPrice: rulePricing?.fixedPrice,
+            }))
+          : calculateWholesalePrice({
+              price,
+              discountPercent: rulePricing?.discountPercent,
+              discountAmount: rulePricing?.discountAmount,
+              fixedPrice: rulePricing?.fixedPrice,
+            });
       const discountPercent =
         wholesalePrice !== null && wholesalePrice < price
           ? Number((((price - wholesalePrice) / price) * 100).toFixed(4))

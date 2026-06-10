@@ -60,7 +60,7 @@ export const PLAN_DEFINITIONS: PlanDefinition[] = [
     highlights: [
       "Create up to 10 wholesale forms",
       "Manage pricing for 500 products",
-      "Dedicated product and SKU pricing rules",
+      "Quantity tier pricing rules",
       "Flexible storefront display controls",
     ],
     bestFor: "Growing wholesale catalogs",
@@ -113,6 +113,10 @@ export function isWithinLimit(currentCount: number, limit: number | null) {
 
 export function hasProPlan(planName?: string | null) {
   return planName === PRO_PLAN;
+}
+
+export function hasTierPricingPlan(planName?: string | null) {
+  return planName === ADVANCE_PLAN || planName === PRO_PLAN;
 }
 
 export function getCurrentPlanName(

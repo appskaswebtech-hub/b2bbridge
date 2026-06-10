@@ -28,7 +28,7 @@ import {
 
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
-import { formatLimit, hasProPlan, isWithinLimit } from "../billing";
+import { formatLimit, hasTierPricingPlan, isWithinLimit } from "../billing";
 import { getBillingStatus } from "../billing.server";
 import {
   defaultTierPricingRules,
@@ -244,7 +244,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "add_rule") {
     const billingStatus = await getBillingStatus(billing);
-    const canUseTierPricing = hasProPlan(billingStatus.currentPlan);
+    const canUseTierPricing = hasTierPricingPlan(billingStatus.currentPlan);
     const selectedProducts = parseProductSelections(formData.get("products"));
     const priceMode = String(formData.get("priceMode") || "percent");
     const tierPricingRules =
@@ -266,15 +266,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (priceMode === "tier" && !canUseTierPricing) {
       return {
         ok: false,
-        error: "Tier-based wholesale pricing is available on the Pro plan.",
+        error:
+          "Tier-based wholesale pricing is available on the Advance plan and higher.",
       };
     }
 
-    if (
-      !discountPercent &&
-      !discountAmount &&
-      tierPricingRules.length === 0
-    ) {
+    if (!discountPercent && !discountAmount && tierPricingRules.length === 0) {
       return {
         ok: false,
         error: "Add a discount percentage, amount off, or tier pricing rule.",
@@ -350,7 +347,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "update_rule") {
     const billingStatus = await getBillingStatus(billing);
-    const canUseTierPricing = hasProPlan(billingStatus.currentPlan);
+    const canUseTierPricing = hasTierPricingPlan(billingStatus.currentPlan);
     const ruleId = String(formData.get("ruleId") || "");
     const rulePriceMode = String(formData.get("rulePriceMode") || "percent");
     const tierPricingRules =
@@ -367,15 +364,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (rulePriceMode === "tier" && !canUseTierPricing) {
       return {
         ok: false,
-        error: "Tier-based wholesale pricing is available on the Pro plan.",
+        error:
+          "Tier-based wholesale pricing is available on the Advance plan and higher.",
       };
     }
 
-    if (
-      !discountPercent &&
-      !discountAmount &&
-      tierPricingRules.length === 0
-    ) {
+    if (!discountPercent && !discountAmount && tierPricingRules.length === 0) {
       return {
         ok: false,
         error: "Add a discount percentage, amount off, or tier pricing rule.",
@@ -559,7 +553,8 @@ function PricingRuleEditor({
             </InlineGrid>
             {rulePriceMode === "tier" && !canUseTierPricing ? (
               <Banner tone="warning">
-                Tier-based wholesale pricing is a Pro plan feature.
+                Tier-based wholesale pricing is available on the Advance plan
+                and higher.
               </Banner>
             ) : null}
             <InlineStack align="end">
@@ -587,37 +582,89 @@ function TierPricingFields({
   tiers: { minQuantity: number; discountPercent: number }[];
   namePrefix: "tier";
 }) {
-  const normalizedTiers = Array.from(
-    { length: 3 },
-    (_, index) => tiers[index] || defaultTierPricingRules[index],
+  const [tierRows, setTierRows] = useState(
+    Array.from(
+      { length: 3 },
+      (_, index) => tiers[index] || defaultTierPricingRules[index],
+    ),
   );
 
+  useEffect(() => {
+    setTierRows(
+      Array.from(
+        { length: 3 },
+        (_, index) => tiers[index] || defaultTierPricingRules[index],
+      ),
+    );
+  }, [tiers]);
+
+  function updateTier(
+    index: number,
+    field: "minQuantity" | "discountPercent",
+    value: string,
+  ) {
+    setTierRows((currentRows) =>
+      currentRows.map((tier, tierIndex) =>
+        tierIndex === index
+          ? {
+              ...tier,
+              [field]: value,
+            }
+          : tier,
+      ),
+    );
+  }
+
   return (
-    <BlockStack gap="200">
-      {normalizedTiers.map((tier, index) => (
+    <BlockStack gap="300">
+      <Box padding="300" background="bg-surface-secondary" borderRadius="200">
+        <BlockStack gap="100">
+          <Text as="p" fontWeight="semibold">
+            Quantity based discount
+          </Text>
+          <Text as="p" variant="bodySm" tone="subdued">
+            Set the minimum quantity a customer must buy, then set the wholesale
+            discount for that quantity and above.
+          </Text>
+        </BlockStack>
+      </Box>
+
+      {tierRows.map((tier, index) => (
         <InlineGrid
           key={index}
           columns={{ xs: 1, sm: "minmax(0, 1fr) minmax(0, 1fr)" }}
           gap="200"
         >
           <TextField
-            label={`Tier ${index + 1} minimum quantity`}
+            label={`Tier ${index + 1}: minimum quantity`}
             name={`${namePrefix}MinQuantity${index}`}
             type="number"
             min={2}
             value={String(tier.minQuantity)}
+            onChange={(value) => updateTier(index, "minQuantity", value)}
             disabled={disabled}
+            helpText={
+              index === 0
+                ? "Example: 10 means this tier starts when quantity is 10 or more."
+                : undefined
+            }
             autoComplete="off"
           />
           <TextField
-            label={`Tier ${index + 1} discount`}
+            label={`Tier ${index + 1}: discount`}
             name={`${namePrefix}DiscountPercent${index}`}
             type="number"
             min={0}
             max={100}
             suffix="%"
             value={String(tier.discountPercent)}
+            onChange={(value) => updateTier(index, "discountPercent", value)}
             disabled={disabled}
+            helpText={
+              index === 0
+                ? "Example: 10 means 10% off at this quantity tier."
+                : undefined
+            }
             autoComplete="off"
           />
         </InlineGrid>
@@ -706,7 +753,7 @@ export default function WholesalePricingPage() {
   const [discountAmount, setDiscountAmount] = useState("");
   const [draftReady, setDraftReady] = useState(false);
   const productRuleLimitLabel = formatLimit(billing.limits.products);
-  const canUseTierPricing = hasProPlan(billing.currentPlan);
+  const canUseTierPricing = hasTierPricingPlan(billing.currentPlan);
   const canAddProductRule = isWithinLimit(
     setting.productRules.length,
     billing.limits.products,
@@ -899,94 +946,671 @@ export default function WholesalePricingPage() {
           <Banner tone="critical">{actionData.error}</Banner>
         ) : null}
 
-        <InlineGrid columns={{ xs: 1, lg: "minmax(0, 1fr) 380px" }} gap="400">
-          <BlockStack gap="400">
+        <BlockStack gap="400">
+          <Form method="post">
+            <input type="hidden" name="intent" value="save_settings" />
+            <input
+              type="hidden"
+              name="pricingMode"
+              value={pricingMode[0] || "global"}
+            />
+            <input
+              type="hidden"
+              name="globalPriceMode"
+              value={globalPriceMode[0] || "percent"}
+            />
+            <input
+              type="hidden"
+              name="productPriceStyle"
+              value={productPriceStyle[0] || "simple"}
+            />
+            <input
+              type="hidden"
+              name="productPricePlacement"
+              value={productPricePlacement[0] || "replace_price"}
+            />
+            <input
+              type="hidden"
+              name="collectionPriceStyle"
+              value={collectionPriceStyle[0] || "compact"}
+            />
+            <input
+              type="hidden"
+              name="collectionPricePlacement"
+              value={collectionPricePlacement[0] || "replace_price"}
+            />
+            <Card>
+              <BlockStack gap="400">
+                <BlockStack gap="100">
+                  <Text as="h2" variant="headingLg">
+                    Pricing strategy
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    Choose whether wholesale customers receive one catalog-wide
+                    discount or targeted product/SKU rules.
+                  </Text>
+                </BlockStack>
+
+                <Checkbox
+                  label="Enable wholesale pricing on storefront"
+                  checked={enabled}
+                  onChange={setEnabled}
+                />
+                {enabled ? (
+                  <input type="hidden" name="enabled" value="on" />
+                ) : null}
+
+                <TextField
+                  label="Eligible customer tag"
+                  name="customerTag"
+                  value={customerTag}
+                  onChange={setCustomerTag}
+                  autoComplete="off"
+                  helpText="Logged-in customers with this Shopify tag can see wholesale prices."
+                />
+
+                <ChoiceList
+                  title="Discount coverage"
+                  choices={[
+                    {
+                      label: "Global discount for every product",
+                      value: "global",
+                      helpText:
+                        "Use one wholesale discount across the entire storefront catalog.",
+                    },
+                    {
+                      label: "Specific product and SKU rules",
+                      value: "specific",
+                      helpText:
+                        "Only selected products or variants receive wholesale pricing.",
+                    },
+                  ]}
+                  selected={pricingMode}
+                  onChange={setPricingMode}
+                />
+
+                {pricingMode[0] === "global" ? (
+                  <>
+                    <ChoiceList
+                      title="Global discount type"
+                      choices={[
+                        {
+                          label: "Percentage off",
+                          value: "percent",
+                        },
+                        {
+                          label: "Fixed amount off",
+                          value: "amount",
+                        },
+                      ]}
+                      selected={globalPriceMode}
+                      onChange={changeGlobalPriceMode}
+                    />
+
+                    <Box maxWidth="320px">
+                      {globalPriceMode[0] === "percent" ? (
+                        <TextField
+                          label="Percentage off"
+                          name="globalDiscountPercent"
+                          type="number"
+                          min={0}
+                          max={100}
+                          suffix="%"
+                          value={globalDiscountPercent}
+                          onChange={setGlobalDiscountPercent}
+                          autoComplete="off"
+                        />
+                      ) : (
+                        <TextField
+                          label="Amount off"
+                          name="globalDiscountAmount"
+                          type="number"
+                          min={0}
+                          prefix="$"
+                          value={globalDiscountAmount}
+                          onChange={setGlobalDiscountAmount}
+                          autoComplete="off"
+                        />
+                      )}
+                    </Box>
+                  </>
+                ) : null}
+
+                <InlineStack align="end">
+                  <Button variant="primary" submit loading={isSubmitting}>
+                    Save pricing settings
+                  </Button>
+                </InlineStack>
+              </BlockStack>
+            </Card>
+
+            <Box paddingBlockStart="400">
+              <Card>
+                <BlockStack gap="500">
+                  <InlineStack align="space-between" blockAlign="start">
+                    <BlockStack gap="100">
+                      <Text as="h2" variant="headingLg">
+                        Storefront display
+                      </Text>
+                      <Text as="p" tone="subdued">
+                        Set product page and collection card pricing styles
+                        independently. Start with the recommended defaults, then
+                        use custom selectors only for stubborn themes.
+                      </Text>
+                    </BlockStack>
+                    <Badge tone="info">Theme safe</Badge>
+                  </InlineStack>
+
+                  <InlineGrid columns={{ xs: 1, lg: 2 }} gap="400">
+                    <Box
+                      padding="400"
+                      borderWidth="025"
+                      borderColor="border"
+                      borderRadius="200"
+                      background="bg-surface"
+                    >
+                      <BlockStack gap="400">
+                        <InlineStack align="space-between" blockAlign="center">
+                          <BlockStack gap="050">
+                            <Text as="h3" variant="headingMd">
+                              Product page
+                            </Text>
+                            <Text as="p" variant="bodySm" tone="subdued">
+                              Best for product detail pages: simple and close to
+                              the theme price.
+                            </Text>
+                          </BlockStack>
+                          <Badge tone="success">Recommended</Badge>
+                        </InlineStack>
+
+                        <Box
+                          padding="300"
+                          borderWidth="025"
+                          borderColor="border"
+                          borderRadius="200"
+                          background="bg-surface-secondary"
+                        >
+                          <BlockStack gap="100">
+                            {productShowLabel ? (
+                              <Text as="p" variant="bodySm" tone="subdued">
+                                Wholesale price
+                              </Text>
+                            ) : null}
+                            <p
+                              style={{
+                                color: productAccentColor,
+                                fontSize: "20px",
+                                fontWeight: 650,
+                                lineHeight: 1.2,
+                                margin: 0,
+                              }}
+                            >
+                              US$1,314.98
+                            </p>
+                            {productShowCompare ? (
+                              <Text as="p" variant="bodySm" tone="subdued">
+                                Retail US$2,629.95
+                              </Text>
+                            ) : null}
+                            {productShowDiscount ? (
+                              <InlineStack>
+                                <Badge tone="success">50% off</Badge>
+                              </InlineStack>
+                            ) : null}
+                          </BlockStack>
+                        </Box>
+
+                        <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
+                          <Select
+                            label="Appearance"
+                            options={[
+                              { label: "Simple text", value: "simple" },
+                              { label: "Soft card", value: "card" },
+                              { label: "Pill", value: "pill" },
+                            ]}
+                            value={productPriceStyle[0] || "simple"}
+                            onChange={(value) => setProductPriceStyle([value])}
+                          />
+                          <Select
+                            label="Position"
+                            options={[
+                              {
+                                label: "Replace theme price",
+                                value: "replace_price",
+                              },
+                              {
+                                label: "Below product title",
+                                value: "below_title",
+                              },
+                              {
+                                label: "Above add to cart",
+                                value: "above_form",
+                              },
+                              {
+                                label: "Custom selector",
+                                value: "custom_selector",
+                              },
+                            ]}
+                            value={productPricePlacement[0] || "replace_price"}
+                            onChange={(value) =>
+                              setProductPricePlacement([value])
+                            }
+                          />
+                        </InlineGrid>
+
+                        <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
+                          <TextField
+                            label="Price size"
+                            name="productFontSize"
+                            type="number"
+                            min={10}
+                            max={36}
+                            suffix="px"
+                            value={productFontSize}
+                            onChange={setProductFontSize}
+                            autoComplete="off"
+                          />
+                          <TextField
+                            label="Price color"
+                            name="productAccentColor"
+                            value={productAccentColor}
+                            onChange={setProductAccentColor}
+                            autoComplete="off"
+                            helpText="Use a hex color."
+                          />
+                        </InlineGrid>
+
+                        <InlineStack gap="300">
+                          <Checkbox
+                            label="Label"
+                            checked={productShowLabel}
+                            onChange={setProductShowLabel}
+                          />
+                          <Checkbox
+                            label="Retail"
+                            checked={productShowCompare}
+                            onChange={setProductShowCompare}
+                          />
+                          <Checkbox
+                            label="Badge"
+                            checked={productShowDiscount}
+                            onChange={setProductShowDiscount}
+                          />
+                        </InlineStack>
+
+                        {productShowLabel ? (
+                          <input
+                            type="hidden"
+                            name="productShowLabel"
+                            value="on"
+                          />
+                        ) : null}
+                        {productShowCompare ? (
+                          <input
+                            type="hidden"
+                            name="productShowCompare"
+                            value="on"
+                          />
+                        ) : null}
+                        {productShowDiscount ? (
+                          <input
+                            type="hidden"
+                            name="productShowDiscount"
+                            value="on"
+                          />
+                        ) : null}
+
+                        {productPricePlacement[0] === "custom_selector" ? (
+                          <TextField
+                            label="Product price selector"
+                            name="productPriceSelector"
+                            value={productPriceSelector}
+                            onChange={setProductPriceSelector}
+                            autoComplete="off"
+                            helpText="Example: .product__price"
+                          />
+                        ) : (
+                          <input
+                            type="hidden"
+                            name="productPriceSelector"
+                            value={productPriceSelector}
+                          />
+                        )}
+                      </BlockStack>
+                    </Box>
+
+                    <Box
+                      padding="400"
+                      borderWidth="025"
+                      borderColor="border"
+                      borderRadius="200"
+                      background="bg-surface"
+                    >
+                      <BlockStack gap="400">
+                        <InlineStack align="space-between" blockAlign="center">
+                          <BlockStack gap="050">
+                            <Text as="h3" variant="headingMd">
+                              Collection cards
+                            </Text>
+                            <Text as="p" variant="bodySm" tone="subdued">
+                              Keep cards compact so prices do not collide with
+                              neighboring products.
+                            </Text>
+                          </BlockStack>
+                          <Badge tone="success">Recommended</Badge>
+                        </InlineStack>
+
+                        <Box
+                          padding="300"
+                          borderWidth="025"
+                          borderColor="border"
+                          borderRadius="200"
+                          background="bg-surface-secondary"
+                        >
+                          <BlockStack gap="050">
+                            {collectionShowLabel ? (
+                              <Text as="p" variant="bodySm" tone="subdued">
+                                Wholesale price
+                              </Text>
+                            ) : null}
+                            <p
+                              style={{
+                                color: collectionAccentColor,
+                                fontSize: "14px",
+                                fontWeight: 650,
+                                lineHeight: 1.25,
+                                margin: 0,
+                              }}
+                            >
+                              US$1,314.98
+                            </p>
+                            {collectionShowCompare ? (
+                              <Text as="p" variant="bodySm" tone="subdued">
+                                Retail US$2,629.95
+                              </Text>
+                            ) : null}
+                            {collectionShowDiscount ? (
+                              <InlineStack>
+                                <Badge tone="success">50% off</Badge>
+                              </InlineStack>
+                            ) : null}
+                          </BlockStack>
+                        </Box>
+
+                        <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
+                          <Select
+                            label="Appearance"
+                            options={[
+                              { label: "Compact", value: "compact" },
+                              { label: "Simple text", value: "simple" },
+                              { label: "Soft card", value: "card" },
+                              { label: "Pill", value: "pill" },
+                            ]}
+                            value={collectionPriceStyle[0] || "compact"}
+                            onChange={(value) =>
+                              setCollectionPriceStyle([value])
+                            }
+                          />
+                          <Select
+                            label="Position"
+                            options={[
+                              {
+                                label: "Replace theme price",
+                                value: "replace_price",
+                              },
+                              {
+                                label: "Below title",
+                                value: "below_title",
+                              },
+                              {
+                                label: "Below image",
+                                value: "below_image",
+                              },
+                              {
+                                label: "Custom selector",
+                                value: "custom_selector",
+                              },
+                            ]}
+                            value={
+                              collectionPricePlacement[0] || "replace_price"
+                            }
+                            onChange={(value) =>
+                              setCollectionPricePlacement([value])
+                            }
+                          />
+                        </InlineGrid>
+
+                        <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
+                          <TextField
+                            label="Price size"
+                            name="collectionFontSize"
+                            type="number"
+                            min={10}
+                            max={36}
+                            suffix="px"
+                            value={collectionFontSize}
+                            onChange={setCollectionFontSize}
+                            autoComplete="off"
+                          />
+                          <TextField
+                            label="Price color"
+                            name="collectionAccentColor"
+                            value={collectionAccentColor}
+                            onChange={setCollectionAccentColor}
+                            autoComplete="off"
+                            helpText="Use a hex color."
+                          />
+                        </InlineGrid>
+
+                        <InlineStack gap="300">
+                          <Checkbox
+                            label="Label"
+                            checked={collectionShowLabel}
+                            onChange={setCollectionShowLabel}
+                          />
+                          <Checkbox
+                            label="Retail"
+                            checked={collectionShowCompare}
+                            onChange={setCollectionShowCompare}
+                          />
+                          <Checkbox
+                            label="Badge"
+                            checked={collectionShowDiscount}
+                            onChange={setCollectionShowDiscount}
+                          />
+                        </InlineStack>
+
+                        {collectionShowLabel ? (
+                          <input
+                            type="hidden"
+                            name="collectionShowLabel"
+                            value="on"
+                          />
+                        ) : null}
+                        {collectionShowCompare ? (
+                          <input
+                            type="hidden"
+                            name="collectionShowCompare"
+                            value="on"
+                          />
+                        ) : null}
+                        {collectionShowDiscount ? (
+                          <input
+                            type="hidden"
+                            name="collectionShowDiscount"
+                            value="on"
+                          />
+                        ) : null}
+
+                        {collectionPricePlacement[0] === "custom_selector" ? (
+                          <BlockStack gap="300">
+                            <TextField
+                              label="Collection card selector"
+                              name="collectionCardSelector"
+                              value={collectionCardSelector}
+                              onChange={setCollectionCardSelector}
+                              autoComplete="off"
+                              helpText="Optional. Example: .product-card-wrapper"
+                            />
+                            <TextField
+                              label="Collection price selector"
+                              name="collectionPriceSelector"
+                              value={collectionPriceSelector}
+                              onChange={setCollectionPriceSelector}
+                              autoComplete="off"
+                              helpText="Example: .price"
+                            />
+                          </BlockStack>
+                        ) : (
+                          <>
+                            <input
+                              type="hidden"
+                              name="collectionCardSelector"
+                              value={collectionCardSelector}
+                            />
+                            <input
+                              type="hidden"
+                              name="collectionPriceSelector"
+                              value={collectionPriceSelector}
+                            />
+                          </>
+                        )}
+                      </BlockStack>
+                    </Box>
+                  </InlineGrid>
+
+                  <InlineStack align="end">
+                    <Button variant="primary" submit loading={isSubmitting}>
+                      Save storefront display
+                    </Button>
+                  </InlineStack>
+                </BlockStack>
+              </Card>
+            </Box>
+          </Form>
+
+          {pricingMode[0] === "specific" ? (
             <Form method="post">
-              <input type="hidden" name="intent" value="save_settings" />
+              <input type="hidden" name="intent" value="add_rule" />
               <input
                 type="hidden"
-                name="pricingMode"
-                value={pricingMode[0] || "global"}
+                name="priceMode"
+                value={priceMode[0] || "percent"}
               />
               <input
                 type="hidden"
-                name="globalPriceMode"
-                value={globalPriceMode[0] || "percent"}
-              />
-              <input
-                type="hidden"
-                name="productPriceStyle"
-                value={productPriceStyle[0] || "simple"}
-              />
-              <input
-                type="hidden"
-                name="productPricePlacement"
-                value={productPricePlacement[0] || "replace_price"}
-              />
-              <input
-                type="hidden"
-                name="collectionPriceStyle"
-                value={collectionPriceStyle[0] || "compact"}
-              />
-              <input
-                type="hidden"
-                name="collectionPricePlacement"
-                value={collectionPricePlacement[0] || "replace_price"}
+                name="products"
+                value={JSON.stringify(
+                  selectedProducts.map((product) => product.value),
+                )}
               />
               <Card>
                 <BlockStack gap="400">
                   <BlockStack gap="100">
                     <Text as="h2" variant="headingLg">
-                      Pricing strategy
+                      Product and SKU rules
                     </Text>
                     <Text as="p" tone="subdued">
-                      Choose whether wholesale customers receive one
-                      catalog-wide discount or targeted product/SKU rules.
+                      Select products or variants and assign dedicated wholesale
+                      discounts.
                     </Text>
                   </BlockStack>
 
-                  <Checkbox
-                    label="Enable wholesale pricing on storefront"
-                    checked={enabled}
-                    onChange={setEnabled}
-                  />
-                  {enabled ? (
-                    <input type="hidden" name="enabled" value="on" />
+                  {!canAddProductRule ? (
+                    <Banner
+                      tone="warning"
+                      action={{
+                        content: "Upgrade plan",
+                        url: "/app/billing",
+                      }}
+                    >
+                      Your current plan allows {productRuleLimitLabel} product
+                      pricing rules. Upgrade to add more products.
+                    </Banner>
                   ) : null}
 
-                  <TextField
-                    label="Eligible customer tag"
-                    name="customerTag"
-                    value={customerTag}
-                    onChange={setCustomerTag}
-                    autoComplete="off"
-                    helpText="Logged-in customers with this Shopify tag can see wholesale prices."
-                  />
+                  <BlockStack gap="300">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <BlockStack gap="050">
+                        <Text as="p" fontWeight="semibold">
+                          Product selection
+                        </Text>
+                        <Text as="p" tone="subdued">
+                          Pick one or more products from the Shopify catalog.
+                        </Text>
+                      </BlockStack>
+                      <Button
+                        onClick={
+                          canAddProductRule ? openProductPicker : undefined
+                        }
+                        url={!canAddProductRule ? "/app/billing" : undefined}
+                      >
+                        {selectedProducts.length
+                          ? "Change products"
+                          : canAddProductRule
+                            ? "Select products"
+                            : "Upgrade plan"}
+                      </Button>
+                    </InlineStack>
 
-                  <ChoiceList
-                    title="Discount coverage"
-                    choices={[
-                      {
-                        label: "Global discount for every product",
-                        value: "global",
-                        helpText:
-                          "Use one wholesale discount across the entire storefront catalog.",
-                      },
-                      {
-                        label: "Specific product and SKU rules",
-                        value: "specific",
-                        helpText:
-                          "Only selected products or variants receive wholesale pricing.",
-                      },
-                    ]}
-                    selected={pricingMode}
-                    onChange={setPricingMode}
-                  />
+                    {selectedProducts.length ? (
+                      <Box
+                        padding="300"
+                        borderWidth="025"
+                        borderColor="border"
+                        borderRadius="200"
+                        background="bg-surface-secondary"
+                      >
+                        <BlockStack gap="200">
+                          <InlineStack
+                            align="space-between"
+                            blockAlign="center"
+                          >
+                            <Text as="p" fontWeight="semibold">
+                              {`${selectedProducts.length} selected`}
+                            </Text>
+                            <Badge tone="success">Ready to save</Badge>
+                          </InlineStack>
+                          <BlockStack gap="100">
+                            {selectedProducts.slice(0, 6).map((product) => (
+                              <Text
+                                key={
+                                  product.value.variantGid ||
+                                  product.value.productGid
+                                }
+                                as="p"
+                                variant="bodySm"
+                              >
+                                {product.label}
+                              </Text>
+                            ))}
+                            {selectedProducts.length > 6 ? (
+                              <Text as="p" variant="bodySm" tone="subdued">
+                                {`${selectedProducts.length - 6} more selected`}
+                              </Text>
+                            ) : null}
+                          </BlockStack>
+                        </BlockStack>
+                      </Box>
+                    ) : (
+                      <Box
+                        padding="400"
+                        borderWidth="025"
+                        borderColor="border"
+                        borderRadius="200"
+                        background="bg-surface"
+                      >
+                        <Text as="p" tone="subdued">
+                          Select products before adding a pricing rule.
+                        </Text>
+                      </Box>
+                    )}
+                  </BlockStack>
 
-                  {pricingMode[0] === "global" ? (
+                  {selectedProducts.length ? (
                     <>
                       <ChoiceList
-                        title="Global discount type"
+                        title="Rule discount type"
                         choices={[
                           {
                             label: "Percentage off",
@@ -996,718 +1620,136 @@ export default function WholesalePricingPage() {
                             label: "Fixed amount off",
                             value: "amount",
                           },
+                          {
+                            label: "Quantity tiers",
+                            value: "tier",
+                            helpText:
+                              "Advance plan and higher. Example: 10+ gets 10%, 50+ gets 20%, 100+ gets 30%.",
+                          },
                         ]}
-                        selected={globalPriceMode}
-                        onChange={changeGlobalPriceMode}
+                        selected={priceMode}
+                        onChange={changePriceMode}
                       />
 
-                      <Box maxWidth="320px">
-                        {globalPriceMode[0] === "percent" ? (
+                      <Box
+                        maxWidth={priceMode[0] === "tier" ? "100%" : "320px"}
+                      >
+                        {priceMode[0] === "tier" ? (
+                          <TierPricingFields
+                            disabled={!canUseTierPricing}
+                            tiers={defaultTierPricingRules}
+                            namePrefix="tier"
+                          />
+                        ) : priceMode[0] === "percent" ? (
                           <TextField
                             label="Percentage off"
-                            name="globalDiscountPercent"
+                            name="discountPercent"
                             type="number"
                             min={0}
                             max={100}
                             suffix="%"
-                            value={globalDiscountPercent}
-                            onChange={setGlobalDiscountPercent}
+                            value={discountPercent}
+                            onChange={setDiscountPercent}
                             autoComplete="off"
                           />
                         ) : (
                           <TextField
                             label="Amount off"
-                            name="globalDiscountAmount"
+                            name="discountAmount"
                             type="number"
                             min={0}
                             prefix="$"
-                            value={globalDiscountAmount}
-                            onChange={setGlobalDiscountAmount}
+                            value={discountAmount}
+                            onChange={setDiscountAmount}
                             autoComplete="off"
                           />
                         )}
                       </Box>
-                    </>
-                  ) : null}
 
-                  <InlineStack align="end">
-                    <Button variant="primary" submit loading={isSubmitting}>
-                      Save pricing settings
-                    </Button>
-                  </InlineStack>
-                </BlockStack>
-              </Card>
-
-              <Box paddingBlockStart="400">
-                <Card>
-                  <BlockStack gap="500">
-                    <InlineStack align="space-between" blockAlign="start">
-                      <BlockStack gap="100">
-                        <Text as="h2" variant="headingLg">
-                          Storefront display
-                        </Text>
-                        <Text as="p" tone="subdued">
-                          Set product page and collection card pricing styles
-                          independently. Start with the recommended defaults,
-                          then use custom selectors only for stubborn themes.
-                        </Text>
-                      </BlockStack>
-                      <Badge tone="info">Theme safe</Badge>
-                    </InlineStack>
-
-                    <InlineGrid columns={{ xs: 1, lg: 2 }} gap="400">
-                      <Box
-                        padding="400"
-                        borderWidth="025"
-                        borderColor="border"
-                        borderRadius="200"
-                        background="bg-surface"
-                      >
-                        <BlockStack gap="400">
-                          <InlineStack
-                            align="space-between"
-                            blockAlign="center"
-                          >
-                            <BlockStack gap="050">
-                              <Text as="h3" variant="headingMd">
-                                Product page
-                              </Text>
-                              <Text as="p" variant="bodySm" tone="subdued">
-                                Best for product detail pages: simple and close
-                                to the theme price.
-                              </Text>
-                            </BlockStack>
-                            <Badge tone="success">Recommended</Badge>
-                          </InlineStack>
-
-                          <Box
-                            padding="300"
-                            borderWidth="025"
-                            borderColor="border"
-                            borderRadius="200"
-                            background="bg-surface-secondary"
-                          >
-                            <BlockStack gap="100">
-                              {productShowLabel ? (
-                                <Text as="p" variant="bodySm" tone="subdued">
-                                  Wholesale price
-                                </Text>
-                              ) : null}
-                              <p
-                                style={{
-                                  color: productAccentColor,
-                                  fontSize: "20px",
-                                  fontWeight: 650,
-                                  lineHeight: 1.2,
-                                  margin: 0,
-                                }}
-                              >
-                                US$1,314.98
-                              </p>
-                              {productShowCompare ? (
-                                <Text as="p" variant="bodySm" tone="subdued">
-                                  Retail US$2,629.95
-                                </Text>
-                              ) : null}
-                              {productShowDiscount ? (
-                                <InlineStack>
-                                  <Badge tone="success">50% off</Badge>
-                                </InlineStack>
-                              ) : null}
-                            </BlockStack>
-                          </Box>
-
-                          <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
-                            <Select
-                              label="Appearance"
-                              options={[
-                                { label: "Simple text", value: "simple" },
-                                { label: "Soft card", value: "card" },
-                                { label: "Pill", value: "pill" },
-                              ]}
-                              value={productPriceStyle[0] || "simple"}
-                              onChange={(value) =>
-                                setProductPriceStyle([value])
-                              }
-                            />
-                            <Select
-                              label="Position"
-                              options={[
-                                {
-                                  label: "Replace theme price",
-                                  value: "replace_price",
-                                },
-                                {
-                                  label: "Below product title",
-                                  value: "below_title",
-                                },
-                                {
-                                  label: "Above add to cart",
-                                  value: "above_form",
-                                },
-                                {
-                                  label: "Custom selector",
-                                  value: "custom_selector",
-                                },
-                              ]}
-                              value={
-                                productPricePlacement[0] || "replace_price"
-                              }
-                              onChange={(value) =>
-                                setProductPricePlacement([value])
-                              }
-                            />
-                          </InlineGrid>
-
-                          <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
-                            <TextField
-                              label="Price size"
-                              name="productFontSize"
-                              type="number"
-                              min={10}
-                              max={36}
-                              suffix="px"
-                              value={productFontSize}
-                              onChange={setProductFontSize}
-                              autoComplete="off"
-                            />
-                            <TextField
-                              label="Price color"
-                              name="productAccentColor"
-                              value={productAccentColor}
-                              onChange={setProductAccentColor}
-                              autoComplete="off"
-                              helpText="Use a hex color."
-                            />
-                          </InlineGrid>
-
-                          <InlineStack gap="300">
-                            <Checkbox
-                              label="Label"
-                              checked={productShowLabel}
-                              onChange={setProductShowLabel}
-                            />
-                            <Checkbox
-                              label="Retail"
-                              checked={productShowCompare}
-                              onChange={setProductShowCompare}
-                            />
-                            <Checkbox
-                              label="Badge"
-                              checked={productShowDiscount}
-                              onChange={setProductShowDiscount}
-                            />
-                          </InlineStack>
-
-                          {productShowLabel ? (
-                            <input
-                              type="hidden"
-                              name="productShowLabel"
-                              value="on"
-                            />
-                          ) : null}
-                          {productShowCompare ? (
-                            <input
-                              type="hidden"
-                              name="productShowCompare"
-                              value="on"
-                            />
-                          ) : null}
-                          {productShowDiscount ? (
-                            <input
-                              type="hidden"
-                              name="productShowDiscount"
-                              value="on"
-                            />
-                          ) : null}
-
-                          {productPricePlacement[0] === "custom_selector" ? (
-                            <TextField
-                              label="Product price selector"
-                              name="productPriceSelector"
-                              value={productPriceSelector}
-                              onChange={setProductPriceSelector}
-                              autoComplete="off"
-                              helpText="Example: .product__price"
-                            />
-                          ) : (
-                            <input
-                              type="hidden"
-                              name="productPriceSelector"
-                              value={productPriceSelector}
-                            />
-                          )}
-                        </BlockStack>
-                      </Box>
-
-                      <Box
-                        padding="400"
-                        borderWidth="025"
-                        borderColor="border"
-                        borderRadius="200"
-                        background="bg-surface"
-                      >
-                        <BlockStack gap="400">
-                          <InlineStack
-                            align="space-between"
-                            blockAlign="center"
-                          >
-                            <BlockStack gap="050">
-                              <Text as="h3" variant="headingMd">
-                                Collection cards
-                              </Text>
-                              <Text as="p" variant="bodySm" tone="subdued">
-                                Keep cards compact so prices do not collide with
-                                neighboring products.
-                              </Text>
-                            </BlockStack>
-                            <Badge tone="success">Recommended</Badge>
-                          </InlineStack>
-
-                          <Box
-                            padding="300"
-                            borderWidth="025"
-                            borderColor="border"
-                            borderRadius="200"
-                            background="bg-surface-secondary"
-                          >
-                            <BlockStack gap="050">
-                              {collectionShowLabel ? (
-                                <Text as="p" variant="bodySm" tone="subdued">
-                                  Wholesale price
-                                </Text>
-                              ) : null}
-                              <p
-                                style={{
-                                  color: collectionAccentColor,
-                                  fontSize: "14px",
-                                  fontWeight: 650,
-                                  lineHeight: 1.25,
-                                  margin: 0,
-                                }}
-                              >
-                                US$1,314.98
-                              </p>
-                              {collectionShowCompare ? (
-                                <Text as="p" variant="bodySm" tone="subdued">
-                                  Retail US$2,629.95
-                                </Text>
-                              ) : null}
-                              {collectionShowDiscount ? (
-                                <InlineStack>
-                                  <Badge tone="success">50% off</Badge>
-                                </InlineStack>
-                              ) : null}
-                            </BlockStack>
-                          </Box>
-
-                          <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
-                            <Select
-                              label="Appearance"
-                              options={[
-                                { label: "Compact", value: "compact" },
-                                { label: "Simple text", value: "simple" },
-                                { label: "Soft card", value: "card" },
-                                { label: "Pill", value: "pill" },
-                              ]}
-                              value={collectionPriceStyle[0] || "compact"}
-                              onChange={(value) =>
-                                setCollectionPriceStyle([value])
-                              }
-                            />
-                            <Select
-                              label="Position"
-                              options={[
-                                {
-                                  label: "Replace theme price",
-                                  value: "replace_price",
-                                },
-                                {
-                                  label: "Below title",
-                                  value: "below_title",
-                                },
-                                {
-                                  label: "Below image",
-                                  value: "below_image",
-                                },
-                                {
-                                  label: "Custom selector",
-                                  value: "custom_selector",
-                                },
-                              ]}
-                              value={
-                                collectionPricePlacement[0] || "replace_price"
-                              }
-                              onChange={(value) =>
-                                setCollectionPricePlacement([value])
-                              }
-                            />
-                          </InlineGrid>
-
-                          <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
-                            <TextField
-                              label="Price size"
-                              name="collectionFontSize"
-                              type="number"
-                              min={10}
-                              max={36}
-                              suffix="px"
-                              value={collectionFontSize}
-                              onChange={setCollectionFontSize}
-                              autoComplete="off"
-                            />
-                            <TextField
-                              label="Price color"
-                              name="collectionAccentColor"
-                              value={collectionAccentColor}
-                              onChange={setCollectionAccentColor}
-                              autoComplete="off"
-                              helpText="Use a hex color."
-                            />
-                          </InlineGrid>
-
-                          <InlineStack gap="300">
-                            <Checkbox
-                              label="Label"
-                              checked={collectionShowLabel}
-                              onChange={setCollectionShowLabel}
-                            />
-                            <Checkbox
-                              label="Retail"
-                              checked={collectionShowCompare}
-                              onChange={setCollectionShowCompare}
-                            />
-                            <Checkbox
-                              label="Badge"
-                              checked={collectionShowDiscount}
-                              onChange={setCollectionShowDiscount}
-                            />
-                          </InlineStack>
-
-                          {collectionShowLabel ? (
-                            <input
-                              type="hidden"
-                              name="collectionShowLabel"
-                              value="on"
-                            />
-                          ) : null}
-                          {collectionShowCompare ? (
-                            <input
-                              type="hidden"
-                              name="collectionShowCompare"
-                              value="on"
-                            />
-                          ) : null}
-                          {collectionShowDiscount ? (
-                            <input
-                              type="hidden"
-                              name="collectionShowDiscount"
-                              value="on"
-                            />
-                          ) : null}
-
-                          {collectionPricePlacement[0] === "custom_selector" ? (
-                            <BlockStack gap="300">
-                              <TextField
-                                label="Collection card selector"
-                                name="collectionCardSelector"
-                                value={collectionCardSelector}
-                                onChange={setCollectionCardSelector}
-                                autoComplete="off"
-                                helpText="Optional. Example: .product-card-wrapper"
-                              />
-                              <TextField
-                                label="Collection price selector"
-                                name="collectionPriceSelector"
-                                value={collectionPriceSelector}
-                                onChange={setCollectionPriceSelector}
-                                autoComplete="off"
-                                helpText="Example: .price"
-                              />
-                            </BlockStack>
-                          ) : (
-                            <>
-                              <input
-                                type="hidden"
-                                name="collectionCardSelector"
-                                value={collectionCardSelector}
-                              />
-                              <input
-                                type="hidden"
-                                name="collectionPriceSelector"
-                                value={collectionPriceSelector}
-                              />
-                            </>
-                          )}
-                        </BlockStack>
-                      </Box>
-                    </InlineGrid>
-
-                    <InlineStack align="end">
-                      <Button variant="primary" submit loading={isSubmitting}>
-                        Save storefront display
-                      </Button>
-                    </InlineStack>
-                  </BlockStack>
-                </Card>
-              </Box>
-            </Form>
-
-            {pricingMode[0] === "specific" ? (
-              <Form method="post">
-                <input type="hidden" name="intent" value="add_rule" />
-                <input
-                  type="hidden"
-                  name="priceMode"
-                  value={priceMode[0] || "percent"}
-                />
-                <input
-                  type="hidden"
-                  name="products"
-                  value={JSON.stringify(
-                    selectedProducts.map((product) => product.value),
-                  )}
-                />
-                <Card>
-                  <BlockStack gap="400">
-                    <BlockStack gap="100">
-                      <Text as="h2" variant="headingLg">
-                        Product and SKU rules
-                      </Text>
-                      <Text as="p" tone="subdued">
-                        Select products or variants and assign dedicated
-                        wholesale discounts.
-                      </Text>
-                    </BlockStack>
-
-                    {!canAddProductRule ? (
-                      <Banner
-                        tone="warning"
-                        action={{
-                          content: "Upgrade plan",
-                          url: "/app/billing",
-                        }}
-                      >
-                        Your current plan allows {productRuleLimitLabel} product
-                        pricing rules. Upgrade to add more products.
-                      </Banner>
-                    ) : null}
-
-                    <BlockStack gap="300">
-                      <InlineStack align="space-between" blockAlign="center">
-                        <BlockStack gap="050">
-                          <Text as="p" fontWeight="semibold">
-                            Product selection
-                          </Text>
-                          <Text as="p" tone="subdued">
-                            Pick one or more products from the Shopify catalog.
-                          </Text>
-                        </BlockStack>
-                        <Button
-                          onClick={
-                            canAddProductRule ? openProductPicker : undefined
-                          }
-                          url={!canAddProductRule ? "/app/billing" : undefined}
+                      {priceMode[0] === "tier" && !canUseTierPricing ? (
+                        <Banner
+                          tone="warning"
+                          action={{
+                            content: "Upgrade plan",
+                            url: "/app/billing",
+                          }}
                         >
-                          {selectedProducts.length
-                            ? "Change products"
-                            : canAddProductRule
-                              ? "Select products"
-                              : "Upgrade plan"}
+                          Tier-based wholesale pricing is available on the
+                          Advance plan and higher.
+                        </Banner>
+                      ) : null}
+
+                      <InlineStack align="end">
+                        <Button
+                          submit
+                          loading={isSubmitting}
+                          disabled={
+                            !canAddProductRule ||
+                            (priceMode[0] === "tier" && !canUseTierPricing)
+                          }
+                        >
+                          Save product rule
                         </Button>
                       </InlineStack>
+                    </>
+                  ) : null}
+                </BlockStack>
+              </Card>
+            </Form>
+          ) : null}
+        </BlockStack>
 
-                      {selectedProducts.length ? (
-                        <Box
-                          padding="300"
-                          borderWidth="025"
-                          borderColor="border"
-                          borderRadius="200"
-                          background="bg-surface-secondary"
-                        >
-                          <BlockStack gap="200">
-                            <InlineStack
-                              align="space-between"
-                              blockAlign="center"
-                            >
-                              <Text as="p" fontWeight="semibold">
-                                {`${selectedProducts.length} selected`}
-                              </Text>
-                              <Badge tone="success">Ready to save</Badge>
-                            </InlineStack>
-                            <BlockStack gap="100">
-                              {selectedProducts.slice(0, 6).map((product) => (
-                                <Text
-                                  key={
-                                    product.value.variantGid ||
-                                    product.value.productGid
-                                  }
-                                  as="p"
-                                  variant="bodySm"
-                                >
-                                  {product.label}
-                                </Text>
-                              ))}
-                              {selectedProducts.length > 6 ? (
-                                <Text as="p" variant="bodySm" tone="subdued">
-                                  {`${selectedProducts.length - 6} more selected`}
-                                </Text>
-                              ) : null}
-                            </BlockStack>
-                          </BlockStack>
-                        </Box>
-                      ) : (
-                        <Box
-                          padding="400"
-                          borderWidth="025"
-                          borderColor="border"
-                          borderRadius="200"
-                          background="bg-surface"
-                        >
-                          <Text as="p" tone="subdued">
-                            Select products before adding a pricing rule.
-                          </Text>
-                        </Box>
-                      )}
-                    </BlockStack>
-
-                    {selectedProducts.length ? (
-                      <>
-                        <ChoiceList
-                          title="Rule discount type"
-                          choices={[
-                            {
-                              label: "Percentage off",
-                              value: "percent",
-                            },
-                            {
-                              label: "Fixed amount off",
-                              value: "amount",
-                            },
-                            {
-                              label: "Quantity tiers",
-                              value: "tier",
-                              helpText:
-                                "Pro plan only. Example: 10+ gets 10%, 50+ gets 20%, 100+ gets 30%.",
-                            },
-                          ]}
-                          selected={priceMode}
-                          onChange={changePriceMode}
-                        />
-
-                        <Box maxWidth={priceMode[0] === "tier" ? "100%" : "320px"}>
-                          {priceMode[0] === "tier" ? (
-                            <TierPricingFields
-                              disabled={!canUseTierPricing}
-                              tiers={defaultTierPricingRules}
-                              namePrefix="tier"
-                            />
-                          ) : priceMode[0] === "percent" ? (
-                            <TextField
-                              label="Percentage off"
-                              name="discountPercent"
-                              type="number"
-                              min={0}
-                              max={100}
-                              suffix="%"
-                              value={discountPercent}
-                              onChange={setDiscountPercent}
-                              autoComplete="off"
-                            />
-                          ) : (
-                            <TextField
-                              label="Amount off"
-                              name="discountAmount"
-                              type="number"
-                              min={0}
-                              prefix="$"
-                              value={discountAmount}
-                              onChange={setDiscountAmount}
-                              autoComplete="off"
-                            />
-                          )}
-                        </Box>
-
-                        {priceMode[0] === "tier" && !canUseTierPricing ? (
-                          <Banner
-                            tone="warning"
-                            action={{
-                              content: "Upgrade plan",
-                              url: "/app/billing",
-                            }}
-                          >
-                            Tier-based wholesale pricing is available on the Pro
-                            plan.
-                          </Banner>
-                        ) : null}
-
-                        <InlineStack align="end">
-                          <Button
-                            submit
-                            loading={isSubmitting}
-                            disabled={
-                              !canAddProductRule ||
-                              (priceMode[0] === "tier" && !canUseTierPricing)
-                            }
-                          >
-                            Save product rule
-                          </Button>
-                        </InlineStack>
-                      </>
-                    ) : null}
-                  </BlockStack>
-                </Card>
-              </Form>
-            ) : null}
-          </BlockStack>
-
-          {pricingMode[0] === "specific" ? (
-            <Card>
-              <BlockStack gap="400">
+        {pricingMode[0] === "specific" ? (
+          <Card>
+            <BlockStack gap="400">
+              <InlineStack align="space-between" blockAlign="start">
                 <BlockStack gap="100">
                   <Text as="h2" variant="headingLg">
                     Saved product rules
                   </Text>
                   <Text as="p" tone="subdued">
-                    These rules apply only when specific product pricing is
-                    selected.
+                    Review and edit product, SKU, and quantity based pricing
+                    rules.
                   </Text>
                 </BlockStack>
+                <Badge>{`${setting.productRules.length} rule${
+                  setting.productRules.length === 1 ? "" : "s"
+                }`}</Badge>
+              </InlineStack>
 
-                <Divider />
+              <Divider />
 
-                {setting.productRules.length === 0 ? (
-                  <Text as="p" tone="subdued">
-                    No product or SKU rules saved yet.
-                  </Text>
-                ) : (
-                  <BlockStack gap="300">
-                    {setting.productRules.map((rule) => (
-                      <PricingRuleEditor
-                        key={rule.id}
-                        rule={rule}
-                        isSubmitting={isSubmitting}
-                        canUseTierPricing={canUseTierPricing}
-                      />
-                    ))}
-                  </BlockStack>
-                )}
-              </BlockStack>
-            </Card>
-          ) : (
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingLg">
-                  Product rules paused
-                </Text>
+              {setting.productRules.length === 0 ? (
                 <Text as="p" tone="subdued">
-                  Global discount mode is selected, so saved product rules are
-                  kept but not applied on the storefront.
+                  No product or SKU rules saved yet.
                 </Text>
-              </BlockStack>
-            </Card>
-          )}
-        </InlineGrid>
+              ) : (
+                <InlineGrid columns={{ xs: 1, lg: 2 }} gap="400">
+                  {setting.productRules.map((rule) => (
+                    <PricingRuleEditor
+                      key={rule.id}
+                      rule={rule}
+                      isSubmitting={isSubmitting}
+                      canUseTierPricing={canUseTierPricing}
+                    />
+                  ))}
+                </InlineGrid>
+              )}
+            </BlockStack>
+          </Card>
+        ) : (
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h2" variant="headingLg">
+                Product rules paused
+              </Text>
+              <Text as="p" tone="subdued">
+                Global discount mode is selected, so saved product rules are
+                kept but not applied on the storefront.
+              </Text>
+            </BlockStack>
+          </Card>
+        )}
       </BlockStack>
     </Page>
   );

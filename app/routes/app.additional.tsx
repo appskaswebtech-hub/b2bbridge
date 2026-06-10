@@ -14,7 +14,7 @@ import {
   Text,
 } from "@shopify/polaris";
 
-import { formatLimit, getPlanDefinition, hasProPlan } from "../billing";
+import { formatLimit, getPlanDefinition, hasTierPricingPlan } from "../billing";
 import { getBillingStatus } from "../billing.server";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
@@ -51,7 +51,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       currentPlan: billingStatus.currentPlan,
       limits: billingStatus.limits,
       plan,
-      canUseTierPricing: hasProPlan(billingStatus.currentPlan),
+      canUseTierPricing: hasTierPricingPlan(billingStatus.currentPlan),
     },
     forms: {
       total: totalForms,
@@ -148,13 +148,13 @@ export default function AdvancedSettingsPage() {
               >
                 <BlockStack gap="100">
                   <Text as="p" variant="bodySm" tone="subdued">
-                    Pro-only feature
+                    Advance+ feature
                   </Text>
                   <Text as="p" fontWeight="semibold">
                     Tier-based pricing
                   </Text>
                   <Badge tone={billing.canUseTierPricing ? "success" : "info"}>
-                    {billing.canUseTierPricing ? "Available" : "Upgrade to Pro"}
+                    {billing.canUseTierPricing ? "Available" : "Upgrade to Advance"}
                   </Badge>
                 </BlockStack>
               </Box>
@@ -212,7 +212,7 @@ export default function AdvancedSettingsPage() {
                       ? pricing.hasTierRules
                         ? "Configured"
                         : "Available"
-                      : "Pro plan only"
+                      : "Advance plan and higher"
                   }
                 />
               </InlineGrid>
@@ -280,7 +280,7 @@ export default function AdvancedSettingsPage() {
           <AdvancedSettingCard
             title="Plan and limits"
             badge="Billing"
-            description="Upgrade when merchants need more forms, more product rules, or Pro tier-based pricing."
+            description="Upgrade when merchants need more forms, more product rules, or Advance tier-based pricing."
             action="View plans"
             url="/app/billing"
           />
